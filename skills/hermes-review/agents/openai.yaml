@@ -1,0 +1,4 @@
+interface:
+  display_name: "Hermes Review"
+  short_description: "Delegate/review work with Hermes and DeepSeek"
+  default_prompt: "Use $hermes-review to run a lightweight Hermes-first check or an independent review."

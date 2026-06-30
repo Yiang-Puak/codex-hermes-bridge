@@ -1,0 +1,113 @@
+# codex-hermes-bridge
+
+Local bridge for a Codex + Hermes workflow.
+
+The goal is small and practical: let Codex dispatch lightweight checks or independent reviews to a local Hermes CLI, usually backed by DeepSeek flash/pro, while keeping prompts short and avoiding persistent Markdown report clutter.
+
+## What It Includes
+
+- `tools/hermes-review.ps1`: PowerShell wrapper for Windows -> WSL -> Hermes.
+- `skills/hermes-review/`: Codex Skill that teaches Codex when and how to use the wrapper.
+- `examples/AGENTS.paper.md`: project rules for paper/manuscript work.
+- `examples/AGENTS.code.md`: project rules for coding projects.
+- `tests/smoke-no-run.ps1`: no-token smoke test for wrapper wiring.
+
+This is not an MCP server yet. v0.1 is intentionally script-and-skill first.
+
+## Requirements
+
+- Windows PowerShell.
+- WSL with Hermes installed and available as `hermes` in WSL, typically via `$HOME/.local/bin`.
+- Hermes provider/model configured separately, for example DeepSeek `deepseek-v4-flash` and `deepseek-v4-pro`.
+- Codex Desktop or Codex CLI if you want the Skill/AGENTS workflow.
+
+No API keys are stored in this repository.
+
+The wrapper defaults to `-WslDistro "Ubuntu-24.04"`. Check your local distro name with:
+
+```powershell
+wsl -l -v
+```
+
+If your distro has another name, pass it explicitly:
+
+```powershell
+-WslDistro "Ubuntu-22.04"
+```
+
+## Install The Skill
+
+From the repository root:
+
+```powershell
+$dest = Join-Path $env:USERPROFILE ".codex\skills\hermes-review"
+Remove-Item -Recurse -Force $dest -ErrorAction SilentlyContinue
+Copy-Item -Recurse -Force ".\skills\hermes-review" $dest
+```
+
+Restart Codex after installing a new Skill.
+
+## Use In A Project
+
+Copy one of the templates into your project root as `AGENTS.md`:
+
+```powershell
+Copy-Item ".\examples\AGENTS.paper.md" "D:\path\to\paper-project\AGENTS.md"
+Copy-Item ".\examples\AGENTS.code.md" "D:\path\to\code-project\AGENTS.md"
+```
+
+Then ask Codex with plain language:
+
+```text
+Use Hermes-first flash, PathOnly, no persistent report. Check whether any sentence cites more than three references in main.tex, and relay Hermes output to me.
+```
+
+For complex work:
+
+```text
+Codex should make the edit first, then call Hermes pro for an independent review. Do not keep a Markdown report; summarize Hermes findings and whether you accept them.
+```
+
+## Direct Wrapper Examples
+
+Hermes-first lightweight delegate:
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File ".\tools\hermes-review.ps1" `
+  -Flow delegate -Lite -Mode flash -PathOnly -MaxFindings 8 `
+  -ProjectRoot "D:\path\to\project" -TaskType paper `
+  -Path "D:\path\to\project\main.tex" `
+  -ExtraPrompt "Check whether any sentence cites more than three references."
+```
+
+Independent post-change review:
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File ".\tools\hermes-review.ps1" `
+  -Mode auto -ProjectRoot "D:\path\to\project" -TaskType code `
+  -Path "D:\path\to\project\src\changed-file.ts"
+```
+
+By default the wrapper writes Hermes output to the terminal and deletes the temporary Markdown report after the run. Use `-KeepReport` or `-OutputPath` only when you want a saved artifact.
+
+## Smoke Test
+
+Run this before committing changes:
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File ".\tests\smoke-no-run.ps1"
+```
+
+The smoke test uses `-NoRun`, so it does not call Hermes and does not consume model tokens.
+
+## Model Policy
+
+- `deepseek-v4-flash`: simple checks, small formatting scans, file lists, obvious consistency checks.
+- `deepseek-v4-pro`: paper logic, claim strength, result interpretation, figure/table consistency, multi-file code changes, final handoff review.
+- `auto`: use the wrapper's default selection for ordinary post-change review.
+
+For `-Flow delegate`, `-Mode auto` intentionally defaults to flash because delegate mode is meant for lightweight Hermes-first checks. Use `-Mode pro` explicitly when a delegated check still needs the larger model.
+
+## Status
+
+v0.1 is for personal and small-team use. Keep it simple until the workflow proves it needs MCP, a persistent daemon, or a full Codex plugin.
