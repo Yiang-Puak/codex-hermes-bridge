@@ -18,7 +18,12 @@ param(
 
     [string]$Provider = "",
 
+    [string]$Model = "",
+
     [string]$OutputPath = "",
+
+    [ValidateRange(1, 5)]
+    [int]$OpinionCount = 1,
 
     [ValidateRange(1, 50)]
     [int]$MaxFindings = 8,
@@ -37,8 +42,13 @@ param(
 Set-StrictMode -Version Latest
 $ErrorActionPreference = "Stop"
 
-$FlashModel = "deepseek-v4-flash"
-$ProModel = "deepseek-v4-pro"
+$DefaultProvider = "alibaba"
+$DeepSeekProvider = "deepseek"
+$FlashModel = "qwen3.6-flash"
+$ProModel = "qwen3.7-plus"
+$DeepSeekFlashOpinionModel = "deepseek-v4-flash"
+$CodeProModel = "glm-5.2"
+$DeepSeekProOpinionModel = "deepseek-v4-pro"
 $InlineContentLimit = 60000
 
 [Console]::OutputEncoding = [System.Text.UTF8Encoding]::new($false)
@@ -242,6 +252,10 @@ function Select-HermesModel {
         [string[]]$Files
     )
 
+    if ($Model.Trim().Length -gt 0) {
+        return [pscustomobject]@{ Model = $Model.Trim(); Reason = "explicit model override" }
+    }
+
     if ($ModeValue -eq "flash") {
         return [pscustomobject]@{ Model = $FlashModel; Reason = "manual flash mode" }
     }
@@ -260,7 +274,7 @@ function Select-HermesModel {
     }
 
     if ($codeSignal -and ($charCount -gt 12000 -or $FileCount -ge 4 -or $riskSignal)) {
-        return [pscustomobject]@{ Model = $ProModel; Reason = "code review with size, multiple files, or risk signals" }
+        return [pscustomobject]@{ Model = $CodeProModel; Reason = "code review with size, multiple files, or risk signals" }
     }
 
     if ($charCount -gt 18000 -or $FileCount -ge 5) {
@@ -268,6 +282,58 @@ function Select-HermesModel {
     }
 
     return [pscustomobject]@{ Model = $FlashModel; Reason = "small or routine review payload" }
+}
+
+function Select-OpinionModels {
+    param(
+        [string]$PrimaryModel,
+        [int]$Count
+    )
+
+    if ($Count -le 1) {
+        return @($PrimaryModel)
+    }
+
+    $opinionModels = @($FlashModel, $ProModel, $DeepSeekFlashOpinionModel, $CodeProModel, $DeepSeekProOpinionModel)
+
+    if ($Count -ge 3) {
+        return @($opinionModels | Select-Object -First $Count)
+    }
+
+    $candidates = @()
+    if ($PrimaryModel -eq $CodeProModel -or $PrimaryModel -eq $DeepSeekProOpinionModel) {
+        $candidates += $PrimaryModel
+        $candidates += $ProModel
+    } else {
+        $candidates += $PrimaryModel
+        $candidates += $CodeProModel
+    }
+
+    $unique = @()
+    foreach ($candidate in $candidates) {
+        if ($candidate -and -not ($unique -contains $candidate)) {
+            $unique += $candidate
+        }
+    }
+
+    return @($unique | Select-Object -First $Count)
+}
+
+function Select-HermesProvider {
+    param(
+        [string]$ModelName,
+        [string]$RequestedProvider
+    )
+
+    if ($RequestedProvider.Trim().Length -gt 0) {
+        return $RequestedProvider.Trim()
+    }
+
+    if ($ModelName -match "^(deepseek|vanchin/deepseek|siliconflow/deepseek)") {
+        return $DeepSeekProvider
+    }
+
+    return $DefaultProvider
 }
 
 $resolvedRoot = Resolve-ProjectRoot $ProjectRoot
@@ -302,6 +368,21 @@ if ($Flow -eq "delegate" -and $Mode -eq "auto") {
     $selection = Select-HermesModel -ModeValue $Mode -TaskTypeValue $TaskType -Text $review.Text -FileCount $review.FileCount -Files $review.Files
 }
 $model = $selection.Model
+$models = @(Select-OpinionModels -PrimaryModel $model -Count $OpinionCount)
+$modelSummary = ($models -join ", ")
+$selectionReason = $selection.Reason
+if ($OpinionCount -ge 3) {
+    if ($OpinionCount -eq 3) {
+        $selectionReason = "three independent opinions requested; using Qwen flash, Qwen pro, and DeepSeek flash"
+    } elseif ($OpinionCount -eq 4) {
+        $selectionReason = "four independent opinions requested; adding GLM to Qwen and DeepSeek flash opinions"
+    } else {
+        $selectionReason = "five independent opinions requested; adding DeepSeek pro to Qwen, DeepSeek flash, and GLM opinions"
+    }
+} elseif ($OpinionCount -gt 1) {
+    $selectionReason = "two independent opinions requested"
+}
+$selectedProvider = if ($Provider.Trim().Length -gt 0) { $Provider.Trim() } else { "auto" }
 
 $tempBase = Join-Path ([IO.Path]::GetTempPath()) ("hermes-review-" + [guid]::NewGuid().ToString("N"))
 $inputFile = "$tempBase.input.md"
@@ -349,10 +430,12 @@ Review scope:
 - Project root: $resolvedRoot
 - Source: $($review.Source)
 - Task type: $TaskType
-- Selected model: $model
-- Selection reason: $($selection.Reason)
+- Selected model(s): $modelSummary
+- Selection reason: $selectionReason
+- Provider: $selectedProvider
 - Lite mode: $Lite
 - Max findings: $MaxFindings
+- Opinion count: $OpinionCount
 
 Review instructions:
 $flowInstructions
@@ -392,8 +475,9 @@ $reportHeader = @"
 - Source: $($review.Source)
 - Files: $($review.FileCount)
 - Characters: $($review.Text.Length)
-- Model: $model
-- Selection reason: $($selection.Reason)
+- Model(s): $modelSummary
+- Selection reason: $selectionReason
+- Provider: $selectedProvider
 - Task type: $TaskType
 - Created: $(Get-Date -Format "yyyy-MM-dd HH:mm:ss")
 
@@ -408,10 +492,12 @@ Write-Host "Flow: $Flow"
 Write-Host "Source: $($review.Source)"
 Write-Host "Files: $($review.FileCount)"
 Write-Host "Chars: $($review.Text.Length)"
-Write-Host "Model: $model ($($selection.Reason))"
+Write-Host "Provider: $selectedProvider"
+Write-Host "Model(s): $modelSummary ($selectionReason)"
 Write-Host "Lite: $Lite"
 Write-Host "PathOnly: $usePathOnly"
 Write-Host "MaxFindings: $MaxFindings"
+Write-Host "OpinionCount: $OpinionCount"
 Write-Host "Prompt: $promptFile"
 if ($reportShouldPersist) {
     Write-Host "Report: $resolvedOutputPath"
@@ -437,11 +523,6 @@ $wslProject = ConvertTo-WslPath $resolvedRoot
 $wslPrompt = ConvertTo-WslPath $promptFile
 $wslOutput = ConvertTo-WslPath $resolvedOutputPath
 
-$providerArgs = ""
-if ($Provider.Trim().Length -gt 0) {
-    $providerArgs = " --provider " + (Quote-Bash $Provider)
-}
-
 $liteArgs = ""
 if ($Lite) {
     $liteArgs = " --ignore-rules"
@@ -449,15 +530,24 @@ if ($Lite) {
 
 $cdLine = "cd $(Quote-Bash $wslProject)"
 $promptLine = "prompt=`$(cat $(Quote-Bash $wslPrompt))"
-$runLine = "hermes$liteArgs$providerArgs -m $(Quote-Bash $model) -z `"`$prompt`" 2>&1 | tee -a $(Quote-Bash $wslOutput)"
+$runLines = @("status=0")
+foreach ($runModel in $models) {
+    $quotedModel = Quote-Bash $runModel
+    $runProvider = Select-HermesProvider -ModelName $runModel -RequestedProvider $Provider
+    $quotedProvider = Quote-Bash $runProvider
+    $quotedOutput = Quote-Bash $wslOutput
+    $runLines += "printf '\n\n---\n\n## Hermes pass: %s (%s)\n\n' $quotedModel $quotedProvider | tee -a $quotedOutput"
+    $runLines += "hermes$liteArgs --provider $quotedProvider -m $quotedModel -z `"`$prompt`" 2>&1 | tee -a $quotedOutput"
+    $runLines += 'cmd_status=${PIPESTATUS[0]}; if [ "$cmd_status" -ne 0 ]; then status="$cmd_status"; fi'
+}
 $runnerLines = @(
     "#!/usr/bin/env bash",
     "set -euo pipefail",
     'export PATH="$HOME/.local/bin:$PATH"',
     $cdLine,
-    $promptLine,
-    $runLine,
-    'exit "${PIPESTATUS[0]}"'
+    $promptLine
+) + $runLines + @(
+    'exit "$status"'
 )
 $runnerText = ($runnerLines -join "`n") + "`n"
 [System.IO.File]::WriteAllText($runnerFile, $runnerText, [System.Text.UTF8Encoding]::new($false))

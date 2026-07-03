@@ -2,7 +2,7 @@
 
 Local bridge for a Codex + Hermes workflow.
 
-The goal is small and practical: let Codex dispatch lightweight checks or independent reviews to a local Hermes CLI, usually backed by DeepSeek flash/pro, while keeping prompts short and avoiding persistent Markdown report clutter.
+The goal is small and practical: let Codex dispatch lightweight checks or independent reviews to a local Hermes CLI, using Alibaba Bailian/DashScope and DeepSeek models as needed, while keeping prompts short and avoiding persistent Markdown report clutter.
 
 ## What It Includes
 
@@ -18,7 +18,7 @@ This is not an MCP server yet. v0.1 is intentionally script-and-skill first.
 
 - Windows PowerShell.
 - WSL with Hermes installed and available as `hermes` in WSL, typically via `$HOME/.local/bin`.
-- Hermes provider/model configured separately, for example DeepSeek `deepseek-v4-flash` and `deepseek-v4-pro`.
+- Hermes provider/model configured separately. The default wrapper policy uses Alibaba Bailian/DashScope for Qwen/GLM and DeepSeek official API for DeepSeek models: `qwen3.6-flash`, `qwen3.7-plus`, `deepseek-v4-flash`, `glm-5.2`, and `deepseek-v4-pro`.
 - Codex Desktop or Codex CLI if you want the Skill/AGENTS workflow.
 
 No API keys are stored in this repository.
@@ -90,6 +90,8 @@ powershell -NoProfile -ExecutionPolicy Bypass -File ".\tools\hermes-review.ps1" 
 
 By default the wrapper writes Hermes output to the terminal and deletes the temporary Markdown report after the run. Use `-KeepReport` or `-OutputPath` only when you want a saved artifact.
 
+For a fuller Chinese guide, including standalone Hermes CLI usage, see [docs/HERMES_USAGE.md](docs/HERMES_USAGE.md).
+
 ## Smoke Test
 
 Run this before committing changes:
@@ -102,11 +104,15 @@ The smoke test uses `-NoRun`, so it does not call Hermes and does not consume mo
 
 ## Model Policy
 
-- `deepseek-v4-flash`: simple checks, small formatting scans, file lists, obvious consistency checks.
-- `deepseek-v4-pro`: paper logic, claim strength, result interpretation, figure/table consistency, multi-file code changes, final handoff review.
+- Default provider: `alibaba`.
+- `qwen3.6-flash`: simple checks, small formatting scans, file lists, obvious consistency checks.
+- `qwen3.7-plus`: Hermes pro for paper logic, claim strength, result interpretation, figure/table consistency, and final handoff review.
+- `deepseek-v4-flash`: cheap third opinion when the user asks for three or more independent opinions.
+- `glm-5.2`: high-risk coding review, multi-file code changes, architecture/API/database/auth/dependency review, and complex debugging review.
+- `deepseek-v4-pro`: fifth opinion when the user asks for five independent opinions.
 - `auto`: use the wrapper's default selection for ordinary post-change review.
 
-For `-Flow delegate`, `-Mode auto` intentionally defaults to flash because delegate mode is meant for lightweight Hermes-first checks. Use `-Mode pro` explicitly when a delegated check still needs the larger model.
+For `-Flow delegate`, `-Mode auto` intentionally defaults to flash because delegate mode is meant for lightweight Hermes-first checks. Use `-Mode pro` explicitly when a delegated check still needs the larger model. Use `-OpinionCount 3` for Qwen flash, Qwen pro, and DeepSeek flash; `-OpinionCount 4` adds GLM; `-OpinionCount 5` adds DeepSeek pro. With no explicit `-Provider`, the wrapper routes Qwen/GLM to `alibaba` and DeepSeek models to `deepseek`. Pass `-Provider alibaba` to force all listed models through Bailian instead.
 
 ## Status
 

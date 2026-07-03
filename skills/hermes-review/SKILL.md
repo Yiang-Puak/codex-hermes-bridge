@@ -1,6 +1,6 @@
 ---
 name: hermes-review
-description: Use when Codex should delegate a lightweight check or run an independent review through a local Hermes CLI wrapper, especially for Hermes-first DeepSeek flash checks, DeepSeek pro review, path-only/token-saving inspection, non-persistent Markdown reports, or Codex-plus-Hermes workflows for papers and coding projects.
+description: Use when Codex should delegate a lightweight check or run an independent review through a local Hermes CLI wrapper, especially for Hermes-first Qwen flash checks, Qwen pro paper review, GLM coding review, mixed Qwen/DeepSeek/GLM multi-opinion review, path-only/token-saving inspection, non-persistent Markdown reports, or Codex-plus-Hermes workflows for papers and coding projects.
 ---
 
 # Hermes Review
@@ -48,7 +48,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File "<wrapper>" `
   -Path "<changed-file>"
 ```
 
-Use `-Mode pro` when the review involves paper logic, claim strength, result interpretation, multi-file implementation, final submission checks, or high-risk changes. Use `-Mode flash` for ordinary language, format, and small single-file checks.
+Use `-Mode pro` when the review involves paper logic, claim strength, result interpretation, final submission checks, or high-risk non-code changes. For high-risk code work, `-Mode auto -TaskType code` selects GLM. Use `-Mode flash` for ordinary language, format, and small single-file checks. Use `-OpinionCount 3` for Qwen flash, Qwen pro, and DeepSeek flash; `-OpinionCount 4` adds GLM; `-OpinionCount 5` adds DeepSeek pro.
 
 For exact parameter behavior, read `references/commands.md`.
 

@@ -20,6 +20,6 @@ Use Chinese for project communication unless code comments, APIs, logs, or docum
    `powershell -NoProfile -ExecutionPolicy Bypass -File "<codex-hermes-bridge>\tools\hermes-review.ps1" -ProjectRoot "<project-root>" -TaskType code`
 6. Non-git or no-diff review command:
    `powershell -NoProfile -ExecutionPolicy Bypass -File "<codex-hermes-bridge>\tools\hermes-review.ps1" -ProjectRoot "<project-root>" -TaskType code -Path "<changed-file>"`
-7. Use `deepseek-v4-flash` for small single-file or obvious checks. Use `deepseek-v4-pro` for multi-file changes, architecture/API/database/auth/dependency changes, test failure fixes, and final delivery review.
+7. Use `qwen3.6-flash` for small single-file or obvious checks. Use `glm-5.2` for coding-heavy multi-file changes, architecture/API/database/auth/dependency changes, test failure fixes, and complex debugging review. Use `qwen3.7-plus` for general high-risk review. Use `-OpinionCount 3` for Qwen flash, Qwen pro, and DeepSeek flash; `-OpinionCount 4` adds GLM; `-OpinionCount 5` adds DeepSeek pro.
 8. Do not persist Markdown reports unless the user asks. Relay Hermes findings in the final response and let the wrapper delete its temporary report.
 9. Treat Hermes as independent input, not automatic truth. Codex must verify findings before changing files or accepting conclusions.
