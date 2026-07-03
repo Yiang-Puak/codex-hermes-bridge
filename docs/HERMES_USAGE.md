@@ -1,6 +1,6 @@
 # Hermes 使用说明
 
-这份说明面向你的本机工作流：平时主要用 Codex 做论文修改和小项目开发，需要时让 Hermes 通过阿里百炼/DashScope 模型做轻量委派或独立复核。
+这份说明面向你的本机工作流：平时主要用 Codex 做论文修改和小项目开发，需要时让 Hermes 通过阿里百炼/DashScope 和 DeepSeek API 做轻量委派或独立复核。
 
 ## 1. 单独启动 Hermes
 
@@ -70,6 +70,8 @@ hermes -z "请总结当前目录的项目用途。"
 hermes --provider alibaba -m qwen3.6-flash -z "做一个轻量格式检查。"
 hermes --provider alibaba -m qwen3.7-plus -z "做一次深入论文逻辑审查。"
 hermes --provider alibaba -m glm-5.2 -z "做一次代码审查。"
+hermes --provider deepseek -m deepseek-v4-flash -z "做一次便宜的第二意见。"
+hermes --provider deepseek -m deepseek-v4-pro -z "做一次高质量独立复核。"
 ```
 
 指定 provider：
