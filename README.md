@@ -62,6 +62,12 @@ Then ask Codex with plain language:
 Use Hermes-first flash, PathOnly, no persistent report. Check whether any sentence cites more than three references in main.tex, and relay Hermes output to me.
 ```
 
+You can also ask for explicit model combinations:
+
+```text
+Use DeepSeek flash and Qwen flash to review this project independently, then summarize both opinions.
+```
+
 For complex work:
 
 ```text
@@ -86,6 +92,16 @@ Independent post-change review:
 powershell -NoProfile -ExecutionPolicy Bypass -File ".\tools\hermes-review.ps1" `
   -Mode auto -ProjectRoot "D:\path\to\project" -TaskType code `
   -Path "D:\path\to\project\src\changed-file.ts"
+```
+
+Explicit two-model review:
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File ".\tools\hermes-review.ps1" `
+  -Flow delegate -Lite -PathOnly -ProjectRoot "D:\path\to\project" `
+  -TaskType code -Path "D:\path\to\project\README.md" `
+  -Models "deepseek-flash","qwen-flash" `
+  -ExtraPrompt "Review independently and return concise findings."
 ```
 
 By default the wrapper writes Hermes output to the terminal and deletes the temporary Markdown report after the run. Use `-KeepReport` or `-OutputPath` only when you want a saved artifact.
@@ -113,6 +129,8 @@ The smoke test uses `-NoRun`, so it does not call Hermes and does not consume mo
 - `auto`: use the wrapper's default selection for ordinary post-change review.
 
 For `-Flow delegate`, `-Mode auto` intentionally defaults to flash because delegate mode is meant for lightweight Hermes-first checks. Use `-Mode pro` explicitly when a delegated check still needs the larger model. Use `-OpinionCount 3` for Qwen flash, Qwen pro, and DeepSeek flash; `-OpinionCount 4` adds GLM; `-OpinionCount 5` adds DeepSeek pro. With no explicit `-Provider`, the wrapper routes Qwen/GLM to `alibaba` and DeepSeek models to `deepseek`. Pass `-Provider alibaba` to force all listed models through Bailian instead.
+
+Use `-Models` for exact model rosters. Common aliases are accepted: `qwen-flash`, `qwen-pro`, `deepseek-flash`, `deepseek-pro`, and `glm`.
 
 ## Status
 

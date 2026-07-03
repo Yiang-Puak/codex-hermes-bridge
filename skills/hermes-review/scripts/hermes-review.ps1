@@ -20,6 +20,8 @@ param(
 
     [string]$Model = "",
 
+    [string[]]$Models = @(),
+
     [string]$OutputPath = "",
 
     [ValidateRange(1, 5)]
@@ -147,7 +149,10 @@ function Get-GitReviewContent {
 }
 
 function Resolve-InputPaths {
-    param([string[]]$Items)
+    param(
+        [string[]]$Items,
+        [switch]$AllowDirectories
+    )
 
     $resolved = @()
     $expandedItems = @()
@@ -162,13 +167,23 @@ function Resolve-InputPaths {
 
     foreach ($item in $expandedItems) {
         if (Test-Path -LiteralPath $item) {
-            $resolved += (Resolve-Path -LiteralPath $item).Path
+            $pathItem = Get-Item -LiteralPath $item
+            if ($pathItem.PSIsContainer -and -not $AllowDirectories) {
+                Write-Warning "Skipping directory path in content-review mode: $($pathItem.FullName)"
+                continue
+            }
+            $resolved += $pathItem.FullName
             continue
         }
 
         $matches = @(Resolve-Path -Path $item -ErrorAction SilentlyContinue)
         foreach ($match in $matches) {
-            $resolved += $match.Path
+            $pathItem = Get-Item -LiteralPath $match.Path
+            if ($pathItem.PSIsContainer -and -not $AllowDirectories) {
+                Write-Warning "Skipping directory path in content-review mode: $($pathItem.FullName)"
+                continue
+            }
+            $resolved += $pathItem.FullName
         }
     }
 
@@ -253,7 +268,7 @@ function Select-HermesModel {
     )
 
     if ($Model.Trim().Length -gt 0) {
-        return [pscustomobject]@{ Model = $Model.Trim(); Reason = "explicit model override" }
+        return [pscustomobject]@{ Model = (Resolve-ModelAlias $Model); Reason = "explicit model override" }
     }
 
     if ($ModeValue -eq "flash") {
@@ -282,6 +297,49 @@ function Select-HermesModel {
     }
 
     return [pscustomobject]@{ Model = $FlashModel; Reason = "small or routine review payload" }
+}
+
+function Resolve-ModelAlias {
+    param([string]$Name)
+
+    $normalized = $Name.Trim().ToLowerInvariant() -replace "\s+", "-"
+    switch ($normalized) {
+        "qwen-flash" { return $FlashModel }
+        "qwen3-flash" { return $FlashModel }
+        "qwen3.6-flash" { return $FlashModel }
+        "qwen-pro" { return $ProModel }
+        "qwen-plus" { return $ProModel }
+        "qwen3-pro" { return $ProModel }
+        "qwen3.7-plus" { return $ProModel }
+        "deepseek-flash" { return $DeepSeekFlashOpinionModel }
+        "deepseek-v4-flash" { return $DeepSeekFlashOpinionModel }
+        "deepseek-pro" { return $DeepSeekProOpinionModel }
+        "deepseek-v4-pro" { return $DeepSeekProOpinionModel }
+        "glm" { return $CodeProModel }
+        "glm-pro" { return $CodeProModel }
+        "glm-code" { return $CodeProModel }
+        "glm-5.2" { return $CodeProModel }
+        default { return $Name.Trim() }
+    }
+}
+
+function Resolve-ModelList {
+    param([string[]]$Items)
+
+    $resolved = @()
+    foreach ($item in $Items) {
+        foreach ($part in ($item -split ",")) {
+            $clean = $part.Trim().Trim('"').Trim("'")
+            if ($clean.Length -gt 0) {
+                $modelName = Resolve-ModelAlias $clean
+                if (-not ($resolved -contains $modelName)) {
+                    $resolved += $modelName
+                }
+            }
+        }
+    }
+
+    return @($resolved)
 }
 
 function Select-OpinionModels {
@@ -336,12 +394,31 @@ function Select-HermesProvider {
     return $DefaultProvider
 }
 
+function Get-ModelRouteSummary {
+    param(
+        [string[]]$ModelNames,
+        [string]$RequestedProvider
+    )
+
+    $routes = foreach ($modelName in $ModelNames) {
+        $providerName = Select-HermesProvider -ModelName $modelName -RequestedProvider $RequestedProvider
+        "$modelName($providerName)"
+    }
+
+    return ($routes -join ", ")
+}
+
 $resolvedRoot = Resolve-ProjectRoot $ProjectRoot
 $gitReview = $null
 $usePathOnly = ($PathOnly -or $Flow -eq "delegate")
+$explicitModels = @(Resolve-ModelList $Models)
+
+if ($explicitModels.Count -gt 0 -and $Model.Trim().Length -gt 0) {
+    throw "Use either -Model for one explicit model or -Models for an explicit model list, not both."
+}
 
 if ($usePathOnly) {
-    $resolvedFiles = @(Resolve-InputPaths $Path)
+    $resolvedFiles = @(Resolve-InputPaths -Items $Path)
     if ($resolvedFiles.Count -eq 0) {
         Write-Error "Path-only or delegate flow requires readable -Path files."
     }
@@ -354,7 +431,7 @@ if ($usePathOnly) {
     if ($gitReview -and $gitReview.Text.Trim().Length -gt 0) {
         $review = $gitReview
     } else {
-        $resolvedFiles = @(Resolve-InputPaths $Path)
+        $resolvedFiles = @(Resolve-InputPaths -Items $Path)
         if ($resolvedFiles.Count -eq 0) {
             Write-Error "No git diff was found and no readable -Path files were provided. Pass changed files with -Path, or run this inside a git repo with changes."
         }
@@ -362,16 +439,20 @@ if ($usePathOnly) {
     }
 }
 
-if ($Flow -eq "delegate" -and $Mode -eq "auto") {
+if ($explicitModels.Count -gt 0) {
+    $selection = [pscustomobject]@{ Model = $explicitModels[0]; Reason = "explicit model list override" }
+} elseif ($Flow -eq "delegate" -and $Mode -eq "auto" -and $Model.Trim().Length -eq 0) {
     $selection = [pscustomobject]@{ Model = $FlashModel; Reason = "delegate flow default flash mode" }
 } else {
     $selection = Select-HermesModel -ModeValue $Mode -TaskTypeValue $TaskType -Text $review.Text -FileCount $review.FileCount -Files $review.Files
 }
 $model = $selection.Model
-$models = @(Select-OpinionModels -PrimaryModel $model -Count $OpinionCount)
+$models = if ($explicitModels.Count -gt 0) { $explicitModels } else { @(Select-OpinionModels -PrimaryModel $model -Count $OpinionCount) }
 $modelSummary = ($models -join ", ")
 $selectionReason = $selection.Reason
-if ($OpinionCount -ge 3) {
+if ($explicitModels.Count -gt 0) {
+    $selectionReason = "explicit model list override"
+} elseif ($OpinionCount -ge 3) {
     if ($OpinionCount -eq 3) {
         $selectionReason = "three independent opinions requested; using Qwen flash, Qwen pro, and DeepSeek flash"
     } elseif ($OpinionCount -eq 4) {
@@ -383,6 +464,7 @@ if ($OpinionCount -ge 3) {
     $selectionReason = "two independent opinions requested"
 }
 $selectedProvider = if ($Provider.Trim().Length -gt 0) { $Provider.Trim() } else { "auto" }
+$routeSummary = Get-ModelRouteSummary -ModelNames $models -RequestedProvider $Provider
 
 $tempBase = Join-Path ([IO.Path]::GetTempPath()) ("hermes-review-" + [guid]::NewGuid().ToString("N"))
 $inputFile = "$tempBase.input.md"
@@ -433,6 +515,7 @@ Review scope:
 - Selected model(s): $modelSummary
 - Selection reason: $selectionReason
 - Provider: $selectedProvider
+- Route(s): $routeSummary
 - Lite mode: $Lite
 - Max findings: $MaxFindings
 - Opinion count: $OpinionCount
@@ -478,6 +561,7 @@ $reportHeader = @"
 - Model(s): $modelSummary
 - Selection reason: $selectionReason
 - Provider: $selectedProvider
+- Route(s): $routeSummary
 - Task type: $TaskType
 - Created: $(Get-Date -Format "yyyy-MM-dd HH:mm:ss")
 
@@ -493,6 +577,7 @@ Write-Host "Source: $($review.Source)"
 Write-Host "Files: $($review.FileCount)"
 Write-Host "Chars: $($review.Text.Length)"
 Write-Host "Provider: $selectedProvider"
+Write-Host "Routes: $routeSummary"
 Write-Host "Model(s): $modelSummary ($selectionReason)"
 Write-Host "Lite: $Lite"
 Write-Host "PathOnly: $usePathOnly"
@@ -523,6 +608,11 @@ $wslProject = ConvertTo-WslPath $resolvedRoot
 $wslPrompt = ConvertTo-WslPath $promptFile
 $wslOutput = ConvertTo-WslPath $resolvedOutputPath
 
+& wsl.exe -d $WslDistro -- bash -lc 'export PATH="$HOME/.local/bin:$PATH"; command -v hermes >/dev/null'
+if ($LASTEXITCODE -ne 0) {
+    Write-Error "Hermes CLI was not found in WSL distro '$WslDistro'. Confirm the distro name with 'wsl -l -v' and make sure 'hermes' is on PATH inside WSL."
+}
+
 $liteArgs = ""
 if ($Lite) {
     $liteArgs = " --ignore-rules"
@@ -538,7 +628,7 @@ foreach ($runModel in $models) {
     $quotedOutput = Quote-Bash $wslOutput
     $runLines += "printf '\n\n---\n\n## Hermes pass: %s (%s)\n\n' $quotedModel $quotedProvider | tee -a $quotedOutput"
     $runLines += "hermes$liteArgs --provider $quotedProvider -m $quotedModel -z `"`$prompt`" 2>&1 | tee -a $quotedOutput"
-    $runLines += 'cmd_status=${PIPESTATUS[0]}; if [ "$cmd_status" -ne 0 ]; then status="$cmd_status"; fi'
+    $runLines += 'cmd_status=${PIPESTATUS[0]}; if [ "$cmd_status" -ne 0 ] && [ "$status" -eq 0 ]; then status="$cmd_status"; fi'
 }
 $runnerLines = @(
     "#!/usr/bin/env bash",

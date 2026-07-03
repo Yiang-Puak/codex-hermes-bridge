@@ -112,13 +112,13 @@ hermes status
 
 ## 3. Codex 调用 Hermes 的推荐方式
 
-现在你的两个真实项目已经指向这个 wrapper：
+项目中的 `AGENTS.md` 可以指向这个 wrapper：
 
 ```text
-D:\Desktop\agent练手代码\codex-hermes-bridge\tools\hermes-review.ps1
+<codex-hermes-bridge>\tools\hermes-review.ps1
 ```
 
-也就是说，在 `D:\Desktop\codex润色` 或 `D:\Desktop\agent练手代码` 里，你可以直接用自然语言要求 Codex 调用 Hermes。
+也就是说，在已配置 `AGENTS.md` 的项目里，你可以直接用自然语言要求 Codex 调用 Hermes。
 
 最推荐的简单核对提示：
 
@@ -149,28 +149,28 @@ D:\Desktop\agent练手代码\codex-hermes-bridge\tools\hermes-review.ps1
 轻量 Hermes-first 检查：
 
 ```powershell
-powershell -NoProfile -ExecutionPolicy Bypass -File "D:\Desktop\agent练手代码\codex-hermes-bridge\tools\hermes-review.ps1" `
+powershell -NoProfile -ExecutionPolicy Bypass -File "<codex-hermes-bridge>\tools\hermes-review.ps1" `
   -Flow delegate -Lite -Mode flash -PathOnly -MaxFindings 8 `
-  -ProjectRoot "D:\Desktop\codex润色" -TaskType paper `
-  -Path "D:\Desktop\codex润色\AGENTS.md" `
+  -ProjectRoot "<project-root>" -TaskType paper `
+  -Path "<project-root>\AGENTS.md" `
   -ExtraPrompt "只检查这个文件中的 Hermes 工作流说明是否清楚。"
 ```
 
 Codex 修改后让 Hermes 复核：
 
 ```powershell
-powershell -NoProfile -ExecutionPolicy Bypass -File "D:\Desktop\agent练手代码\codex-hermes-bridge\tools\hermes-review.ps1" `
-  -ProjectRoot "D:\Desktop\agent练手代码" -TaskType code `
-  -Path "D:\Desktop\agent练手代码\AGENTS.md"
+powershell -NoProfile -ExecutionPolicy Bypass -File "<codex-hermes-bridge>\tools\hermes-review.ps1" `
+  -ProjectRoot "<project-root>" -TaskType code `
+  -Path "<project-root>\AGENTS.md"
 ```
 
 不真正调用 Hermes，只验证命令、路径、模型选择和临时报 告行为：
 
 ```powershell
-powershell -NoProfile -ExecutionPolicy Bypass -File "D:\Desktop\agent练手代码\codex-hermes-bridge\tools\hermes-review.ps1" `
+powershell -NoProfile -ExecutionPolicy Bypass -File "<codex-hermes-bridge>\tools\hermes-review.ps1" `
   -Flow delegate -Lite -Mode flash -PathOnly -MaxFindings 3 `
-  -ProjectRoot "D:\Desktop\agent练手代码" -TaskType code `
-  -Path "D:\Desktop\agent练手代码\AGENTS.md" `
+  -ProjectRoot "<project-root>" -TaskType code `
+  -Path "<project-root>\AGENTS.md" `
   -ExtraPrompt "NoRun path verification only." `
   -NoRun
 ```
@@ -256,6 +256,14 @@ Codex 完成主要修改后，让 Hermes 独立审查。适合：
 ```
 
 此时 wrapper 使用 `qwen3.6-flash`、`qwen3.7-plus` 和 `deepseek-v4-flash` 做三路独立审查。需要四个独立意见时使用 `-OpinionCount 4`，即前述三路加一个 `glm-5.2`；需要五个独立意见时使用 `-OpinionCount 5`，即再加 `deepseek-v4-pro`。默认情况下 Qwen/GLM 走阿里百炼，DeepSeek 模型走 DeepSeek 官方 API；如需全部走百炼，可显式传入 `-Provider alibaba`。
+
+如果你想指定精确模型组合，使用：
+
+```powershell
+-Models "deepseek-flash","qwen-flash"
+```
+
+常用别名包括 `qwen-flash`、`qwen-pro`、`deepseek-flash`、`deepseek-pro` 和 `glm`。
 
 `-Flow delegate -Mode auto` 会默认选择 flash，因为 delegate 是为轻量 Hermes-first 检查设计的。如果 delegated task 仍然很难，显式写 `-Mode pro`。
 

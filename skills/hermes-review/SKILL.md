@@ -48,7 +48,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File "<wrapper>" `
   -Path "<changed-file>"
 ```
 
-Use `-Mode pro` when the review involves paper logic, claim strength, result interpretation, final submission checks, or high-risk non-code changes. For high-risk code work, `-Mode auto -TaskType code` selects GLM. Use `-Mode flash` for ordinary language, format, and small single-file checks. Use `-OpinionCount 3` for Qwen flash, Qwen pro, and DeepSeek flash; `-OpinionCount 4` adds GLM; `-OpinionCount 5` adds DeepSeek pro.
+Use `-Mode pro` when the review involves paper logic, claim strength, result interpretation, final submission checks, or high-risk non-code changes. For high-risk code work, `-Mode auto -TaskType code` selects GLM. Use `-Mode flash` for ordinary language, format, and small single-file checks. Use `-OpinionCount 3` for Qwen flash, Qwen pro, and DeepSeek flash; `-OpinionCount 4` adds GLM; `-OpinionCount 5` adds DeepSeek pro. Use `-Models` when the user asks for exact model combinations such as DeepSeek flash plus Qwen flash.
 
 For exact parameter behavior, read `references/commands.md`.
 
