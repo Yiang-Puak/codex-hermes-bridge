@@ -1,43 +1,64 @@
 # codex-hermes-bridge
 
-Local bridge for a Codex + Hermes workflow.
+一个本地的 **Codex + Hermes 协作桥接项目**。
 
-The goal is small and practical: let Codex dispatch lightweight checks or independent reviews to a local Hermes CLI, using Alibaba Bailian/DashScope and DeepSeek models as needed, while keeping prompts short and avoiding persistent Markdown report clutter.
+目标很朴素：平时由 Codex 负责改论文、写代码、整理项目；需要独立复核时，让 Codex 调用本地 Hermes CLI，用 Qwen、DeepSeek、GLM 等模型做轻量检查或多模型审查，同时尽量节省 token，并避免每次都留下 Markdown 报告。
 
-## What It Includes
+## 项目包含什么
 
-- `tools/hermes-review.ps1`: PowerShell wrapper for Windows -> WSL -> Hermes.
-- `skills/hermes-review/`: Codex Skill that teaches Codex when and how to use the wrapper.
-- `examples/AGENTS.paper.md`: project rules for paper/manuscript work.
-- `examples/AGENTS.code.md`: project rules for coding projects.
-- `tests/smoke-no-run.ps1`: no-token smoke test for wrapper wiring.
+- `tools/hermes-review.ps1`：Windows PowerShell -> WSL -> Hermes 的主 wrapper。
+- `skills/hermes-review/`：可安装到 Codex 的 Skill，让 Codex 知道什么时候、怎么调用 Hermes。
+- `examples/AGENTS.paper.md`：论文/稿件项目的 `AGENTS.md` 模板。
+- `examples/AGENTS.code.md`：代码项目的 `AGENTS.md` 模板。
+- `tests/smoke-no-run.ps1`：不消耗模型 token 的 smoke test。
 
-This is not an MCP server yet. v0.1 is intentionally script-and-skill first.
+当前版本不是 MCP server，也不是常驻 daemon。它优先保持简单：脚本 + Skill + 项目规则。
 
-## Requirements
+## 适合的工作流
 
-- Windows PowerShell.
-- WSL with Hermes installed and available as `hermes` in WSL, typically via `$HOME/.local/bin`.
-- Hermes provider/model configured separately. The default wrapper policy uses Alibaba Bailian/DashScope for Qwen/GLM and DeepSeek official API for DeepSeek models: `qwen3.6-flash`, `qwen3.7-plus`, `deepseek-v4-flash`, `glm-5.2`, and `deepseek-v4-pro`.
-- Codex Desktop or Codex CLI if you want the Skill/AGENTS workflow.
+```text
+Codex 修改/整理 -> Hermes 独立审查 -> Codex 复核 Hermes 意见 -> 只采纳能验证的问题
+```
 
-No API keys are stored in this repository.
+常见场景：
 
-The wrapper defaults to `-WslDistro "Ubuntu-24.04"`. Check your local distro name with:
+- 论文润色后，让 Hermes 检查逻辑、引用、图表一致性。
+- 小项目改完后，让 Hermes 独立 code review。
+- 简单任务先让 Hermes flash 快速看一遍，减少 Codex 自己读全文的 token。
+- 重要任务要求多个模型独立给意见，再由 Codex 汇总和判断。
+
+## 环境要求
+
+- Windows PowerShell。
+- WSL，并且 Hermes CLI 在 WSL 内可用，通常在 `$HOME/.local/bin/hermes`。
+- Hermes 的 provider/model 已单独配置好。
+- 如果要使用 Codex 自动调用，建议使用 Codex Desktop 或 Codex CLI，并安装本项目的 Skill。
+
+仓库中不保存任何 API key。
+
+默认 WSL 发行版是 `Ubuntu-24.04`。可以用下面命令查看本机名称：
 
 ```powershell
 wsl -l -v
 ```
 
-If your distro has another name, pass it explicitly:
+如果你的发行版不是这个名字，调用 wrapper 时加：
 
 ```powershell
 -WslDistro "Ubuntu-22.04"
 ```
 
-## Install The Skill
+## 单独打开 Hermes
 
-From the repository root:
+```powershell
+wsl -d Ubuntu-24.04
+cd ~/Hermes
+hermes
+```
+
+## 安装 Codex Skill
+
+在本仓库根目录运行：
 
 ```powershell
 $dest = Join-Path $env:USERPROFILE ".codex\skills\hermes-review"
@@ -45,48 +66,48 @@ Remove-Item -Recurse -Force $dest -ErrorAction SilentlyContinue
 Copy-Item -Recurse -Force ".\skills\hermes-review" $dest
 ```
 
-Restart Codex after installing a new Skill.
+安装后重启 Codex。
 
-## Use In A Project
+## 在项目中使用
 
-Copy one of the templates into your project root as `AGENTS.md`:
+把模板复制到目标项目根目录，命名为 `AGENTS.md`：
 
 ```powershell
 Copy-Item ".\examples\AGENTS.paper.md" "D:\path\to\paper-project\AGENTS.md"
 Copy-Item ".\examples\AGENTS.code.md" "D:\path\to\code-project\AGENTS.md"
 ```
 
-Then ask Codex with plain language:
+之后可以直接用自然语言对 Codex 说：
 
 ```text
-Use Hermes-first flash, PathOnly, no persistent report. Check whether any sentence cites more than three references in main.tex, and relay Hermes output to me.
+改完后让 Hermes 审查。
 ```
-
-You can also ask for explicit model combinations:
 
 ```text
-Use DeepSeek flash and Qwen flash to review this project independently, then summarize both opinions.
+用 qwen-flash 快速检查这个文件。
 ```
-
-For complex work:
 
 ```text
-Codex should make the edit first, then call Hermes pro for an independent review. Do not keep a Markdown report; summarize Hermes findings and whether you accept them.
+用 deepseek-flash 和 qwen-flash 同时审核这个项目，然后你汇总两边意见。
 ```
 
-## Direct Wrapper Examples
+```text
+这张图用 Hermes 视觉审查一下。
+```
 
-Hermes-first lightweight delegate:
+## 直接调用 wrapper
+
+轻量 delegate 检查：
 
 ```powershell
 powershell -NoProfile -ExecutionPolicy Bypass -File ".\tools\hermes-review.ps1" `
   -Flow delegate -Lite -Mode flash -PathOnly -MaxFindings 8 `
   -ProjectRoot "D:\path\to\project" -TaskType paper `
   -Path "D:\path\to\project\main.tex" `
-  -ExtraPrompt "Check whether any sentence cites more than three references."
+  -ExtraPrompt "检查是否有一句正文引用超过三篇参考文献。"
 ```
 
-Independent post-change review:
+Codex 改完后的独立审查：
 
 ```powershell
 powershell -NoProfile -ExecutionPolicy Bypass -File ".\tools\hermes-review.ps1" `
@@ -94,72 +115,100 @@ powershell -NoProfile -ExecutionPolicy Bypass -File ".\tools\hermes-review.ps1" 
   -Path "D:\path\to\project\src\changed-file.ts"
 ```
 
-Explicit two-model review:
+指定两个模型独立审查：
 
 ```powershell
 powershell -NoProfile -ExecutionPolicy Bypass -File ".\tools\hermes-review.ps1" `
   -Flow delegate -Lite -PathOnly -ProjectRoot "D:\path\to\project" `
   -TaskType code -Path "D:\path\to\project\README.md" `
   -Models "deepseek-flash","qwen-flash" `
-  -ExtraPrompt "Review independently and return concise findings."
+  -ExtraPrompt "请独立审查并返回简洁问题列表。"
 ```
 
-Image or screenshot review:
+图片、截图或论文图审查：
 
 ```powershell
 powershell -NoProfile -ExecutionPolicy Bypass -File ".\tools\hermes-review.ps1" `
   -Flow delegate -Lite -PathOnly -ProjectRoot "D:\path\to\project" `
   -TaskType paper -Path "D:\path\to\project\figure.png" `
   -Vision auto -VisionModel qwen3.7-plus `
-  -ExtraPrompt "Check whether the figure is readable and scientifically consistent."
+  -ExtraPrompt "检查图片是否清晰、标注是否完整、是否与正文描述一致。"
 ```
 
-By default the wrapper writes Hermes output to the terminal and deletes the temporary Markdown report after the run. Use `-KeepReport` or `-OutputPath` only when you want a saved artifact.
+默认情况下，wrapper 会把 Hermes 输出显示到终端，并在运行结束后删除临时 Markdown 报告。只有显式使用 `-KeepReport` 或 `-OutputPath` 时，才会保存报告文件。
 
-For a fuller Chinese guide, including standalone Hermes CLI usage, see [docs/HERMES_USAGE.md](docs/HERMES_USAGE.md).
+更完整的中文使用说明见：[docs/HERMES_USAGE.md](docs/HERMES_USAGE.md)。
+
+## 模型策略
+
+默认 provider 路由：
+
+- Qwen / GLM -> `alibaba`
+- DeepSeek -> `deepseek`
+
+常用模型：
+
+- `qwen3.6-flash`：简单检查、格式检查、小文件扫描、低成本快速复核。
+- `qwen3.7-plus`：论文逻辑、结果解释、图表一致性、终稿复核。
+- `deepseek-v4-flash`：便宜的独立补充意见，适合多模型审查。
+- `glm-5.2`：复杂代码改动、架构/API/数据库/auth/依赖、调试类审查。
+- `deepseek-v4-pro`：需要五个独立意见时作为更强的补充意见。
+
+常用参数：
+
+- `-Mode flash`：强制使用轻量模型。
+- `-Mode pro`：强制使用较强模型。
+- `-Mode auto`：让 wrapper 自动选择。
+- `-Models "deepseek-flash","qwen-flash"`：精确指定模型组合。
+- `-OpinionCount 3`：Qwen flash + Qwen pro + DeepSeek flash。
+- `-OpinionCount 4`：在 3 个意见基础上加入 GLM。
+- `-OpinionCount 5`：在 4 个意见基础上加入 DeepSeek pro。
+
+常用别名：
+
+- `qwen-flash` -> `qwen3.6-flash`
+- `qwen-pro` -> `qwen3.7-plus`
+- `deepseek-flash` -> `deepseek-v4-flash`
+- `deepseek-pro` -> `deepseek-v4-pro`
+- `glm` -> `glm-5.2`
+
+## 图片和截图审查
+
+普通 Hermes CLI 路线主要是文本审查。这个 wrapper 会额外检测 `.png`、`.jpg`、`.jpeg`、`.webp` 文件，并在默认 `-Vision auto` 下调用阿里百炼 OpenAI-compatible 视觉接口，把图片本身发送给多模态模型。
+
+关键参数：
+
+- `-Vision auto`：默认，有图片时启用视觉审查。
+- `-Vision off`：不上传图片，只保留路径/文本审查。
+- `-VisionModel qwen3.7-plus`：默认视觉审查模型。
+- `-MaxImageMb 10`：限制每张图片大小。
+- `-HermesEnvPath /root/.hermes/.env`：视觉 sidecar 读取的 WSL env 文件路径。
+
+视觉 sidecar 会先读取图片，再把视觉结果追加给后续文本模型。因此 DeepSeek、Qwen flash、GLM 等文本模型可以基于视觉摘要继续审查。
+
+注意：
+
+- 极小图片可能会被 provider 的尺寸规则拒绝。
+- 正常截图、论文图、界面截图是推荐输入。
+- `-NoRun` 只验证图片检测和路由，不会真的调用视觉 API。
+- `-KeepTemp` 会保留 prompt、runner、vision Python 文件、图片 manifest 和 vision-result Markdown，用于调试。
 
 ## Smoke Test
 
-Run this before committing changes:
+提交 wrapper、Skill 或模板改动前运行：
 
 ```powershell
 powershell -NoProfile -ExecutionPolicy Bypass -File ".\tests\smoke-no-run.ps1"
 ```
 
-The smoke test uses `-NoRun`, so it does not call Hermes and does not consume model tokens.
+这个测试使用 `-NoRun`，不会调用 Hermes，也不会消耗模型 token。
 
-## Model Policy
+## 安全约定
 
-- Default provider: `alibaba`.
-- `qwen3.6-flash`: simple checks, small formatting scans, file lists, obvious consistency checks.
-- `qwen3.7-plus`: Hermes pro for paper logic, claim strength, result interpretation, figure/table consistency, and final handoff review.
-- `deepseek-v4-flash`: cheap third opinion when the user asks for three or more independent opinions.
-- `glm-5.2`: high-risk coding review, multi-file code changes, architecture/API/database/auth/dependency review, and complex debugging review.
-- `deepseek-v4-pro`: fifth opinion when the user asks for five independent opinions.
-- `auto`: use the wrapper's default selection for ordinary post-change review.
+- 不把 API key、provider 私有配置、真实论文内容、本机私有路径或日志提交到仓库。
+- 默认不保存 Markdown 审查报告，避免报告越积越多。
+- Hermes 的意见只是独立输入，不自动等于事实；最终由 Codex 或人工复核后决定是否采纳。
 
-For `-Flow delegate`, `-Mode auto` intentionally defaults to flash because delegate mode is meant for lightweight Hermes-first checks. Use `-Mode pro` explicitly when a delegated check still needs the larger model. Use `-OpinionCount 3` for Qwen flash, Qwen pro, and DeepSeek flash; `-OpinionCount 4` adds GLM; `-OpinionCount 5` adds DeepSeek pro. With no explicit `-Provider`, the wrapper routes Qwen/GLM to `alibaba` and DeepSeek models to `deepseek`. Pass `-Provider alibaba` to force all listed models through Bailian instead.
+## 当前状态
 
-Use `-Models` for exact model rosters. Common aliases are accepted: `qwen-flash`, `qwen-pro`, `deepseek-flash`, `deepseek-pro`, and `glm`.
-
-## Vision Inputs
-
-The normal Hermes CLI route is text-first. When `-Path` includes `.png`, `.jpg`, `.jpeg`, or `.webp`, the wrapper can add a Bailian vision sidecar so the image itself is sent to a multimodal model instead of being listed as skipped binary content.
-
-- `-Vision auto` is the default: image files are sent to `-VisionModel` when present.
-- `-VisionModel qwen3.7-plus` is the default high-quality image reviewer.
-- `-Vision off` disables image upload and leaves only the text/path review.
-- `-MaxImageMb` caps the size of each image sent to the vision API.
-- `-HermesEnvPath` points the vision sidecar at the WSL env file to read; the default is `/root/.hermes/.env`.
-
-Vision uses `DASHSCOPE_API_KEY` from `/root/.hermes/.env` or the WSL environment. The sidecar result is appended to later text-model prompts, so DeepSeek, Qwen flash, GLM, and other text passes can reason over the visual summary. Text passes still use the existing Hermes CLI route and provider routing.
-
-Very tiny images may be rejected by the provider's image-size rules. Normal screenshots, manuscript figures, and UI captures are the intended inputs.
-
-When `-KeepTemp` is used with vision, the temporary prompt, runner, vision Python file, image manifest, and vision-result Markdown file are kept for debugging.
-
-`-NoRun` validates image detection and routing only. It does not call the vision API, so vision-result prompt enrichment appears only in live runs.
-
-## Status
-
-v0.1 is for personal and small-team use. Keep it simple until the workflow proves it needs MCP, a persistent daemon, or a full Codex plugin.
+v0.1 面向个人和小团队本地使用。先保持轻量；只有当脚本 + Skill 的工作流确实不够用时，再考虑 MCP、常驻进程或完整 Codex plugin。
