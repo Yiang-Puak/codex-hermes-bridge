@@ -97,6 +97,19 @@ Copy-Item ".\examples\AGENTS.code.md" "D:\path\to\code-project\AGENTS.md"
 
 ## 直接调用 wrapper
 
+### 材料发送方式
+
+wrapper 会按任务形态自动选择发送方式：
+
+- **Hybrid review**：默认 post-change review 会发送当前 `git diff`，同时附上变更文件的 WSL/Windows 路径，方便 Hermes 在 diff 上下文不足时读取完整文件。
+- **PathOnly**：`-Flow delegate` 或 `-PathOnly` 只发送文件路径，适合简单检查和省 token 场景。
+- **Inline content**：没有 git diff 且显式传入文本文件时，会把文件内容内联给 Hermes。
+- **Vision sidecar**：图片文件由视觉模型读取，再把视觉结果交给后续文本模型。
+
+当提供路径时，prompt 会要求 Hermes 必须实际读取需要的文件；如果读不到，要返回 `READ_FAILED`，不能根据文件名猜测。
+
+每次调用前，wrapper 会显示材料模式、发送方式、字符数、近似输入 token/每个文本模型 pass，以及文本模型调用次数。token 预览是粗略的 char/4 英文基准估算；中文、代码和混合文本的真实 token 数可能更高。
+
 轻量 delegate 检查：
 
 ```powershell

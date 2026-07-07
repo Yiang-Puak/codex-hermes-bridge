@@ -161,11 +161,21 @@ function Get-GitReviewContent {
     $names = & git -C $Root diff --name-only --cached -- . 2>$null
     $names += & git -C $Root diff --name-only -- . 2>$null
     $uniqueNames = @($names | Where-Object { $_ } | Sort-Object -Unique)
+    $existingChangedFiles = @()
+    $missingChangedFiles = @()
     $imageFiles = @()
     foreach ($name in $uniqueNames) {
         $candidate = Join-Path $Root $name
-        if ((Test-Path -LiteralPath $candidate) -and (Test-ImageFile $candidate)) {
-            $imageFiles += (Get-Item -LiteralPath $candidate).FullName
+        if (Test-Path -LiteralPath $candidate) {
+            $item = Get-Item -LiteralPath $candidate
+            if (-not $item.PSIsContainer) {
+                $existingChangedFiles += $item.FullName
+                if (Test-ImageFile $item.FullName) {
+                    $imageFiles += $item.FullName
+                }
+            }
+        } else {
+            $missingChangedFiles += $name
         }
     }
 
@@ -180,9 +190,31 @@ function Get-GitReviewContent {
         $parts += ""
         $parts += $unstaged
     }
+    if ($existingChangedFiles.Count -gt 0) {
+        $parts += ""
+        $parts += "## CHANGED FILES AVAILABLE FOR FULL-CONTEXT INSPECTION"
+        $parts += ""
+        $parts += "Use these paths when the diff lacks enough surrounding context. Read the full file before making claims that depend on content outside the diff."
+        $parts += "If a needed file cannot be read, return READ_FAILED with the path and do not infer content from the filename."
+        $parts += ""
+        foreach ($file in ($existingChangedFiles | Sort-Object -Unique)) {
+            $parts += "- WSL: $(ConvertTo-WslPath $file)"
+            $parts += "  Windows: $file"
+        }
+    }
+    if ($missingChangedFiles.Count -gt 0) {
+        $parts += ""
+        $parts += "## CHANGED FILES NOT AVAILABLE ON DISK"
+        $parts += ""
+        $parts += "These paths appeared in git diff but were not readable from the working tree, often because they were deleted or renamed."
+        $parts += "Do not attempt to read files listed here; rely on the git diff for their removed or renamed content."
+        foreach ($name in ($missingChangedFiles | Sort-Object -Unique)) {
+            $parts += "- $name"
+        }
+    }
 
     return [pscustomobject]@{
-        Source = "git diff"
+        Source = "git diff hybrid"
         Text = ($parts -join "`n")
         FileCount = $uniqueNames.Count
         Files = $uniqueNames
@@ -304,6 +336,7 @@ function Get-PathOnlyReviewContent {
     $parts += ""
     $parts += "Read only the parts of these files needed for the requested task."
     $parts += "Use the WSL paths when invoking tools from Hermes."
+    $parts += "You must actually read any file needed for your conclusion. If a file cannot be read, return READ_FAILED with the path and do not infer content from the filename."
     $parts += ""
 
     foreach ($file in $Files) {
@@ -731,6 +764,18 @@ $visionStatus = if ($visionEnabled) {
 if ($Vision -eq "on" -and $imageFiles.Count -eq 0) {
     Write-Warning "Vision was set to 'on', but no image files were detected in -Path or git diff."
 }
+$materialMode = if ($usePathOnly) {
+    "path-only file references"
+} elseif ($review.Source -eq "git diff hybrid") {
+    "hybrid git diff plus changed file paths"
+} else {
+    "inline explicit file content"
+}
+$promptDelivery = if ($review.Text.Length -le $InlineContentLimit) {
+    "inline review material"
+} else {
+    "temporary input file pointer"
+}
 
 $tempBase = Join-Path ([IO.Path]::GetTempPath()) ("hermes-review-" + [guid]::NewGuid().ToString("N"))
 $inputFile = "$tempBase.input.md"
@@ -749,8 +794,9 @@ if ($Flow -eq "delegate") {
 1. Do the requested task directly and inspect only the necessary parts of the provided files.
 2. Prefer concise, concrete findings over broad review commentary.
 3. Do not rewrite files unless explicitly requested.
-4. Return at most $MaxFindings findings. If there are more, list the most important ones and say how many remain.
-5. Use this format:
+4. If your conclusion depends on a provided path, read that file first. If a file cannot be read, return READ_FAILED with the path and do not infer content from the filename.
+5. Return at most $MaxFindings findings. If there are more, list the most important ones and say how many remain.
+6. Use this format:
    - Model used
    - Findings
    - Residual risks
@@ -763,9 +809,10 @@ if ($Flow -eq "delegate") {
 2. For paper work, check logic, claim strength, terminology consistency, figure/table/text consistency, citation/evidence boundaries, and whether any new statement needs user confirmation.
 3. For code work, check correctness, edge cases, tests, API contracts, dependencies, security-sensitive behavior, and user-facing regressions.
 4. Do not rewrite the whole work. Return findings ordered by severity.
-5. If there are no material issues, say so clearly and mention residual risk or missing validation.
-6. Return at most $MaxFindings findings. If there are more, list the most important ones and say how many remain.
-7. Use this format:
+5. If the diff lacks enough context, use the provided changed-file paths to inspect full files. If a needed file cannot be read, return READ_FAILED with the path and do not infer content from the filename.
+6. If there are no material issues, say so clearly and mention residual risk or missing validation.
+7. Return at most $MaxFindings findings. If there are more, list the most important ones and say how many remain.
+8. Use this format:
    - Model used
    - Findings
    - Residual risks
@@ -785,6 +832,8 @@ Review scope:
 - Selection reason: $selectionReason
 - Provider: $selectedProvider
 - Route(s): $routeSummary
+- Material mode: $materialMode
+- Prompt delivery: $promptDelivery
 - Image files: $($imageFiles.Count)
 - Vision: $visionStatus
 - Lite mode: $Lite
@@ -821,6 +870,9 @@ Read that file before reviewing.
 }
 
 Set-Content -LiteralPath $promptFile -Value $prompt -Encoding UTF8
+$promptCharCount = $prompt.Length
+$approxInputTokensPerPass = [math]::Ceiling($promptCharCount / 4.0)
+$tokenEstimateNote = "rough char/4 English estimate; actual provider tokens may be higher for Chinese, code, and mixed text"
 
 $reportHeader = @"
 # Hermes Review Report
@@ -828,7 +880,12 @@ $reportHeader = @"
 - Project: $resolvedRoot
 - Source: $($review.Source)
 - Files: $($review.FileCount)
-- Characters: $($review.Text.Length)
+- Material mode: $materialMode
+- Prompt delivery: $promptDelivery
+- Material characters: $($review.Text.Length)
+- Prompt characters: $promptCharCount
+- Approx input tokens per text pass: ~$approxInputTokensPerPass ($tokenEstimateNote)
+- Text model passes: $($models.Count)
 - Model(s): $modelSummary
 - Selection reason: $selectionReason
 - Provider: $selectedProvider
@@ -848,7 +905,12 @@ Write-Host "Project: $resolvedRoot"
 Write-Host "Flow: $Flow"
 Write-Host "Source: $($review.Source)"
 Write-Host "Files: $($review.FileCount)"
-Write-Host "Chars: $($review.Text.Length)"
+Write-Host "Material: $materialMode"
+Write-Host "Delivery: $promptDelivery"
+Write-Host "Material chars: $($review.Text.Length)"
+Write-Host "Prompt chars: $promptCharCount"
+Write-Host "Approx input tokens/pass: ~$approxInputTokensPerPass ($tokenEstimateNote)"
+Write-Host "Text passes: $($models.Count)"
 Write-Host "Provider: $selectedProvider"
 Write-Host "Routes: $routeSummary"
 Write-Host "Images: $($imageFiles.Count)"

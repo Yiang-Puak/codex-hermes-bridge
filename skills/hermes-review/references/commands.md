@@ -28,6 +28,8 @@ Use this reference only when exact wrapper parameters are needed.
 
 ## Recommended Patterns
 
+Default post-change review is hybrid: the wrapper sends the current git diff and also includes changed-file WSL/Windows paths so Hermes can inspect full files when the diff lacks context. The prompt tells Hermes to return `READ_FAILED` instead of guessing if a needed file cannot be read.
+
 Simple Hermes-first check:
 
 ```powershell
@@ -71,6 +73,10 @@ With no explicit `-Provider`, DeepSeek model names are routed to provider `deeps
 - Aliases accepted by `-Model` and `-Models`: `qwen-flash`, `qwen-pro`, `deepseek-flash`, `deepseek-pro`, `glm`.
 
 In `-Flow delegate`, `-Mode auto` intentionally starts from `qwen3.6-flash`. Delegate mode is optimized for small Hermes-first checks. Use `-Mode pro` explicitly when a delegated task still needs the larger model.
+
+## Material Preview
+
+Before calling Hermes, the wrapper prints the material mode, delivery mode, material character count, prompt character count, approximate input tokens per text pass, and text pass count. The token preview is a rough char/4 English estimate; Chinese, code, mixed text, tokenizer behavior, and vision-result prompt enrichment can make the final provider-side count higher.
 
 ## Vision Notes
 

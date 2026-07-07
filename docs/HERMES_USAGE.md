@@ -8,7 +8,7 @@
 
 ```powershell
 wsl -d Ubuntu-24.04
-cd /mnt/d/Hermes
+cd ~/Hermes
 hermes
 ```
 
@@ -31,7 +31,7 @@ wsl -d Ubuntu-22.04
 在 WSL 里进入 Hermes 目录后：
 
 ```bash
-cd /mnt/d/Hermes
+cd ~/Hermes
 ```
 
 启动交互式聊天：
@@ -147,6 +147,19 @@ hermes status
 ```
 
 ## 4. Codex wrapper 直接命令
+
+### 材料发送方式
+
+wrapper 会按任务自动选择材料发送方式：
+
+- 默认 review：发送当前 `git diff`，同时附上变更文件的 WSL/Windows 路径。Hermes 可以先看 diff；如果上下文不够，再按路径读取完整文件。
+- `-Flow delegate` 或 `-PathOnly`：只发送路径，适合简单检查和省 token 场景。
+- 没有 git diff 且显式 `-Path` 文本文件：内联文件内容。
+- 图片文件：由视觉 sidecar 读取，再把视觉结果交给后续文本模型。
+
+当 prompt 中提供路径时，wrapper 会要求 Hermes 必须实际读取需要的文件；如果读不到，要返回 `READ_FAILED`，不能根据文件名猜测。
+
+运行前会显示材料模式、发送方式、材料字符数、prompt 字符数、每个文本模型 pass 的近似输入 token 数，以及文本模型调用次数。token 预览是粗略的 char/4 英文基准估算；中文、代码和混合文本的真实 token 数可能更高。
 
 轻量 Hermes-first 检查：
 

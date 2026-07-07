@@ -27,6 +27,8 @@ Classify the task before calling Hermes:
 
 Run local deterministic checks first when available, such as tests, lint, builds, LaTeX compilation, or file-existence checks. Then call Hermes for model-based review.
 
+Default post-change review is hybrid: the wrapper sends git diff plus changed-file paths so Hermes can read full files when diff context is insufficient. For `-PathOnly` and other path-based prompts, Hermes must return `READ_FAILED` instead of guessing if a needed file cannot be read.
+
 ## Commands
 
 For a lightweight delegate check:

@@ -248,6 +248,88 @@ if ($visionOnText -notmatch "Vision was set to 'on'" -or $visionOnText -notmatch
     throw "-Vision on without images did not produce the expected warning/state."
 }
 
+Write-Host ""
+Write-Host "Smoke 11: path-only prompt forbids fake file reads"
+$pathOnlyPromptOutput = & powershell -NoProfile -ExecutionPolicy Bypass -File $Tool `
+    -Flow delegate `
+    -Lite `
+    -PathOnly `
+    -ProjectRoot $RepoRoot `
+    -TaskType code `
+    -Path $Tool `
+    -ExtraPrompt "Smoke test only. Confirm path-only prompt safety wording." `
+    -KeepTemp `
+    -NoRun 2>&1
+$pathOnlyPromptExit = $LASTEXITCODE
+$pathOnlyPromptText = ($pathOnlyPromptOutput -join "`n")
+Write-Host $pathOnlyPromptText
+if ($pathOnlyPromptExit -ne 0) {
+    throw "Path-only prompt dry run failed with exit code $pathOnlyPromptExit"
+}
+$pathOnlyPromptLine = @($pathOnlyPromptText -split "`n" | Where-Object { $_ -like "Prompt:*" } | Select-Object -First 1)
+if ($pathOnlyPromptLine.Count -eq 0) {
+    throw "Path-only dry run did not print a prompt path."
+}
+$pathOnlyPromptPath = $pathOnlyPromptLine[0].Substring("Prompt: ".Length).Trim()
+try {
+    $pathOnlyPromptContent = Get-Content -LiteralPath $pathOnlyPromptPath -Raw -Encoding UTF8
+    if ($pathOnlyPromptContent -notmatch "READ_FAILED" -or $pathOnlyPromptContent -notmatch "do not infer content from the filename") {
+        throw "Path-only prompt did not include the expected anti-fake-read instruction."
+    }
+} finally {
+    $prefix = $pathOnlyPromptPath -replace "\.prompt\.md$", ""
+    Remove-Item -LiteralPath "$prefix.input.md", "$prefix.prompt.md", "$prefix.runner.sh", "$prefix.report.md", "$prefix.vision.py", "$prefix.images.json", "$prefix.vision-result.md" -Force -ErrorAction SilentlyContinue
+}
+
+Write-Host ""
+Write-Host "Smoke 12: git diff review includes hybrid full-context paths"
+$hybridRepo = Join-Path ([IO.Path]::GetTempPath()) ("hermes-hybrid-smoke-" + [guid]::NewGuid().ToString("N"))
+New-Item -ItemType Directory -Force -Path $hybridRepo | Out-Null
+try {
+    & git -C $hybridRepo init -q
+    if ($LASTEXITCODE -ne 0) {
+        throw "Failed to initialize temporary git repo."
+    }
+    $hybridFile = Join-Path $hybridRepo "sample.txt"
+    Set-Content -LiteralPath $hybridFile -Value "hello hybrid review" -Encoding UTF8
+    & git -C $hybridRepo add sample.txt
+    if ($LASTEXITCODE -ne 0) {
+        throw "Failed to stage temporary file."
+    }
+    $hybridOutput = & powershell -NoProfile -ExecutionPolicy Bypass -File $Tool `
+        -ProjectRoot $hybridRepo `
+        -TaskType code `
+        -Mode flash `
+        -ExtraPrompt "Smoke test only. Confirm hybrid git diff context." `
+        -KeepTemp `
+        -NoRun 2>&1
+    $hybridExit = $LASTEXITCODE
+    $hybridText = ($hybridOutput -join "`n")
+    Write-Host $hybridText
+    if ($hybridExit -ne 0) {
+        throw "Hybrid git diff dry run failed with exit code $hybridExit"
+    }
+    if ($hybridText -notmatch "Source: git diff hybrid" -or $hybridText -notmatch "Material: hybrid git diff plus changed file paths") {
+        throw "Hybrid git diff dry run did not print the expected source/material mode."
+    }
+    $hybridPromptLine = @($hybridText -split "`n" | Where-Object { $_ -like "Prompt:*" } | Select-Object -First 1)
+    if ($hybridPromptLine.Count -eq 0) {
+        throw "Hybrid dry run did not print a prompt path."
+    }
+    $hybridPromptPath = $hybridPromptLine[0].Substring("Prompt: ".Length).Trim()
+    try {
+        $hybridPromptContent = Get-Content -LiteralPath $hybridPromptPath -Raw -Encoding UTF8
+        if ($hybridPromptContent -notmatch "CHANGED FILES AVAILABLE FOR FULL-CONTEXT INSPECTION" -or $hybridPromptContent -notmatch "READ_FAILED") {
+            throw "Hybrid prompt did not include changed-file paths and anti-fake-read wording."
+        }
+    } finally {
+        $prefix = $hybridPromptPath -replace "\.prompt\.md$", ""
+        Remove-Item -LiteralPath "$prefix.input.md", "$prefix.prompt.md", "$prefix.runner.sh", "$prefix.report.md", "$prefix.vision.py", "$prefix.images.json", "$prefix.vision-result.md" -Force -ErrorAction SilentlyContinue
+    }
+} finally {
+    Remove-Item -LiteralPath $hybridRepo -Recurse -Force -ErrorAction SilentlyContinue
+}
+
 $repoReportDir = Join-Path $RepoRoot ".codex-hermes-reviews"
 if (Test-Path -LiteralPath $repoReportDir) {
     throw "Smoke test should not create persistent report directory: $repoReportDir"
