@@ -1,6 +1,6 @@
 ---
 name: hermes-review
-description: Use when Codex should delegate a lightweight check or run an independent review through a local Hermes CLI wrapper, especially for Hermes-first Qwen flash checks, Qwen pro paper review, GLM coding review, mixed Qwen/DeepSeek/GLM multi-opinion review, path-only/token-saving inspection, non-persistent Markdown reports, or Codex-plus-Hermes workflows for papers and coding projects.
+description: Use when Codex should delegate a lightweight check or run an independent review through a local Hermes CLI wrapper, especially for Hermes-first Qwen flash checks, Qwen pro paper review, image/figure/screenshot review through a Bailian vision sidecar, GLM coding review, mixed Qwen/DeepSeek/GLM multi-opinion review, path-only/token-saving inspection, non-persistent Markdown reports, or Codex-plus-Hermes workflows for papers and coding projects.
 ---
 
 # Hermes Review
@@ -49,6 +49,8 @@ powershell -NoProfile -ExecutionPolicy Bypass -File "<wrapper>" `
 ```
 
 Use `-Mode pro` when the review involves paper logic, claim strength, result interpretation, final submission checks, or high-risk non-code changes. For high-risk code work, `-Mode auto -TaskType code` selects GLM. Use `-Mode flash` for ordinary language, format, and small single-file checks. Use `-OpinionCount 3` for Qwen flash, Qwen pro, and DeepSeek flash; `-OpinionCount 4` adds GLM; `-OpinionCount 5` adds DeepSeek pro. Use `-Models` when the user asks for exact model combinations such as DeepSeek flash plus Qwen flash.
+
+For image, figure, or screenshot checks, pass the image file with `-Path`. The wrapper uses `-Vision auto` by default and sends `.png`, `.jpg`, `.jpeg`, and `.webp` files to `qwen3.7-plus` through the Bailian vision sidecar. Use `-Vision off` when the user only wants path/text review and no image upload.
 
 For exact parameter behavior, read `references/commands.md`.
 

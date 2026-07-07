@@ -16,9 +16,13 @@ Use this reference only when exact wrapper parameters are needed.
 - `-PathOnly`: pass paths instead of inlining file contents.
 - `-Lite`: call Hermes with `--ignore-rules` for lightweight checks.
 - `-MaxFindings N`: cap review output.
+- `-Vision auto|on|off`: add a Bailian vision sidecar for image files. `auto` sends detected images; `off` leaves image files as path/text context only.
+- `-VisionModel "<model>"`: model used by the vision sidecar. Default is `qwen3.7-plus`.
+- `-MaxImageMb N`: per-image size cap for the vision sidecar. Default is `10`.
+- `-HermesEnvPath "<wsl-path>"`: WSL env file read by the vision sidecar. Default is `/root/.hermes/.env`.
 - `-OpinionCount 1..5`: run one to five independent model passes. `3` uses Qwen flash, Qwen pro, and DeepSeek flash; `4` adds GLM; `5` adds DeepSeek pro.
 - `-KeepReport` or `-OutputPath "<file>"`: persist the Markdown report. Omit both for temporary output.
-- `-KeepTemp`: keep temporary prompt/input/runner files for debugging.
+- `-KeepTemp`: keep temporary prompt/input/runner files for debugging. With vision enabled, this also keeps the Python sidecar, image manifest, and vision-result Markdown file.
 - `-NoRun`: prepare the prompt and validate wrapper plumbing without calling Hermes.
 - `-WslDistro "<name>"`: WSL distribution used to run Hermes. The wrapper default is `Ubuntu-24.04`; use `wsl -l -v` to check local names.
 
@@ -48,6 +52,12 @@ Explicit mixed-provider model roster:
 powershell -NoProfile -ExecutionPolicy Bypass -File "<wrapper>" -Flow delegate -Lite -PathOnly -ProjectRoot "<project-root>" -TaskType code -Path "<file>" -Models "deepseek-flash","qwen-flash" -ExtraPrompt "<specific check>"
 ```
 
+Image or screenshot review:
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File "<wrapper>" -Flow delegate -Lite -PathOnly -ProjectRoot "<project-root>" -TaskType paper -Path "<figure.png>" -Vision auto -VisionModel qwen3.7-plus -ExtraPrompt "<visual check>"
+```
+
 ## Model Notes
 
 Default provider is `alibaba`.
@@ -61,3 +71,13 @@ With no explicit `-Provider`, DeepSeek model names are routed to provider `deeps
 - Aliases accepted by `-Model` and `-Models`: `qwen-flash`, `qwen-pro`, `deepseek-flash`, `deepseek-pro`, `glm`.
 
 In `-Flow delegate`, `-Mode auto` intentionally starts from `qwen3.6-flash`. Delegate mode is optimized for small Hermes-first checks. Use `-Mode pro` explicitly when a delegated task still needs the larger model.
+
+## Vision Notes
+
+The Hermes CLI text route does not inline image bytes. The wrapper detects `.png`, `.jpg`, `.jpeg`, and `.webp` files and, unless `-Vision off` is set, sends them to the Alibaba Bailian OpenAI-compatible vision API with `image_url` content. The default vision model is `qwen3.7-plus`. The vision pass is appended to the same terminal/report output and to the prompt used by later text Hermes passes.
+
+Very tiny images may be rejected by provider image-size rules. Use ordinary screenshots, manuscript figures, or UI captures for practical review.
+
+The sidecar checks `DASHSCOPE_API_KEY` in the WSL process environment first, then in `-HermesEnvPath`.
+
+`-NoRun` does not call the vision API, so it validates detection and routing only. Vision-result prompt enrichment appears only in live runs.

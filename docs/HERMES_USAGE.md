@@ -166,7 +166,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File "<codex-hermes-bridge>\tools
   -Path "<project-root>\AGENTS.md"
 ```
 
-不真正调用 Hermes，只验证命令、路径、模型选择和临时报 告行为：
+不真正调用 Hermes，只验证命令、路径、模型选择和临时报告行为：
 
 ```powershell
 powershell -NoProfile -ExecutionPolicy Bypass -File "<codex-hermes-bridge>\tools\hermes-review.ps1" `
@@ -175,6 +175,17 @@ powershell -NoProfile -ExecutionPolicy Bypass -File "<codex-hermes-bridge>\tools
   -Path "<project-root>\AGENTS.md" `
   -ExtraPrompt "NoRun path verification only." `
   -NoRun
+```
+
+图片、截图或论文图审查：
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File "<codex-hermes-bridge>\tools\hermes-review.ps1" `
+  -Flow delegate -Lite -PathOnly -MaxFindings 8 `
+  -ProjectRoot "<project-root>" -TaskType paper `
+  -Path "<project-root>\figure.png" `
+  -Vision auto -VisionModel qwen3.7-plus `
+  -ExtraPrompt "检查这张图是否清晰、标注是否完整、是否和论文表述一致。"
 ```
 
 ## 5. Hermes 能力分工
@@ -222,6 +233,26 @@ Codex 完成主要修改后，让 Hermes 独立审查。适合：
 
 - 如果要 Hermes 判断多个文件是否存在或是否同步，需要把这些文件都显式放进 `-Path`。
 - PathOnly 审查可能因为视野窄而误报，Codex 需要复核后再采纳。
+
+### 图片和截图审查
+
+普通 Hermes CLI 文本通道不会自动读取图片内容。当前 wrapper 会检测 `.png`、`.jpg`、`.jpeg` 和 `.webp` 文件；默认 `-Vision auto` 时，会把这些图片通过阿里百炼 OpenAI-compatible 视觉接口发送给 `qwen3.7-plus`，再把视觉审查结果和 Hermes 文本审查结果一起输出。
+
+常用参数：
+
+- `-Vision auto`：默认行为，有图片时启用视觉审查。
+- `-VisionModel qwen3.7-plus`：默认高质量视觉模型。
+- `-Vision off`：不上传图片，只保留路径/文本审查。
+- `-MaxImageMb 10`：限制每张图片最大大小。
+- `-HermesEnvPath /root/.hermes/.env`：视觉 sidecar 读取的 WSL env 文件，默认就是这个路径。
+
+如果你让 DeepSeek 或 GLM 等文本模型一起审查图片，图片本身仍由视觉 sidecar 读取；文本模型看到的是路径、提示词和视觉审查输出，需要 Codex 汇总后再判断是否采纳。
+
+极小图片可能会被阿里视觉接口的尺寸规则拒绝。日常截图、论文图、界面截图这类正常尺寸图片是推荐输入。
+
+如果使用 `-KeepTemp` 调试，视觉流程还会保留临时 Python sidecar、图片 manifest 和 vision-result Markdown 文件。
+
+`-NoRun` 只验证图片检测、模型路由和临时文件准备，不会真的调用视觉 API；因此视觉结论只会在真实运行时追加给后续文本模型。
 
 ## 6. 模型选择
 

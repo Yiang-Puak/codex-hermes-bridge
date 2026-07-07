@@ -104,6 +104,16 @@ powershell -NoProfile -ExecutionPolicy Bypass -File ".\tools\hermes-review.ps1" 
   -ExtraPrompt "Review independently and return concise findings."
 ```
 
+Image or screenshot review:
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File ".\tools\hermes-review.ps1" `
+  -Flow delegate -Lite -PathOnly -ProjectRoot "D:\path\to\project" `
+  -TaskType paper -Path "D:\path\to\project\figure.png" `
+  -Vision auto -VisionModel qwen3.7-plus `
+  -ExtraPrompt "Check whether the figure is readable and scientifically consistent."
+```
+
 By default the wrapper writes Hermes output to the terminal and deletes the temporary Markdown report after the run. Use `-KeepReport` or `-OutputPath` only when you want a saved artifact.
 
 For a fuller Chinese guide, including standalone Hermes CLI usage, see [docs/HERMES_USAGE.md](docs/HERMES_USAGE.md).
@@ -131,6 +141,24 @@ The smoke test uses `-NoRun`, so it does not call Hermes and does not consume mo
 For `-Flow delegate`, `-Mode auto` intentionally defaults to flash because delegate mode is meant for lightweight Hermes-first checks. Use `-Mode pro` explicitly when a delegated check still needs the larger model. Use `-OpinionCount 3` for Qwen flash, Qwen pro, and DeepSeek flash; `-OpinionCount 4` adds GLM; `-OpinionCount 5` adds DeepSeek pro. With no explicit `-Provider`, the wrapper routes Qwen/GLM to `alibaba` and DeepSeek models to `deepseek`. Pass `-Provider alibaba` to force all listed models through Bailian instead.
 
 Use `-Models` for exact model rosters. Common aliases are accepted: `qwen-flash`, `qwen-pro`, `deepseek-flash`, `deepseek-pro`, and `glm`.
+
+## Vision Inputs
+
+The normal Hermes CLI route is text-first. When `-Path` includes `.png`, `.jpg`, `.jpeg`, or `.webp`, the wrapper can add a Bailian vision sidecar so the image itself is sent to a multimodal model instead of being listed as skipped binary content.
+
+- `-Vision auto` is the default: image files are sent to `-VisionModel` when present.
+- `-VisionModel qwen3.7-plus` is the default high-quality image reviewer.
+- `-Vision off` disables image upload and leaves only the text/path review.
+- `-MaxImageMb` caps the size of each image sent to the vision API.
+- `-HermesEnvPath` points the vision sidecar at the WSL env file to read; the default is `/root/.hermes/.env`.
+
+Vision uses `DASHSCOPE_API_KEY` from `/root/.hermes/.env` or the WSL environment. The sidecar result is appended to later text-model prompts, so DeepSeek, Qwen flash, GLM, and other text passes can reason over the visual summary. Text passes still use the existing Hermes CLI route and provider routing.
+
+Very tiny images may be rejected by the provider's image-size rules. Normal screenshots, manuscript figures, and UI captures are the intended inputs.
+
+When `-KeepTemp` is used with vision, the temporary prompt, runner, vision Python file, image manifest, and vision-result Markdown file are kept for debugging.
+
+`-NoRun` validates image detection and routing only. It does not call the vision API, so vision-result prompt enrichment appears only in live runs.
 
 ## Status
 

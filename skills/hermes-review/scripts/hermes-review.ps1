@@ -16,6 +16,8 @@ param(
 
     [string]$WslDistro = "Ubuntu-24.04",
 
+    [string]$HermesEnvPath = "/root/.hermes/.env",
+
     [string]$Provider = "",
 
     [string]$Model = "",
@@ -23,6 +25,14 @@ param(
     [string[]]$Models = @(),
 
     [string]$OutputPath = "",
+
+    [ValidateSet("auto", "on", "off")]
+    [string]$Vision = "auto",
+
+    [string]$VisionModel = "qwen3.7-plus",
+
+    [ValidateRange(1, 50)]
+    [int]$MaxImageMb = 10,
 
     [ValidateRange(1, 5)]
     [int]$OpinionCount = 1,
@@ -51,6 +61,7 @@ $ProModel = "qwen3.7-plus"
 $DeepSeekFlashOpinionModel = "deepseek-v4-flash"
 $CodeProModel = "glm-5.2"
 $DeepSeekProOpinionModel = "deepseek-v4-pro"
+$ImageExtensions = @(".png", ".jpg", ".jpeg", ".webp")
 $InlineContentLimit = 60000
 
 [Console]::OutputEncoding = [System.Text.UTF8Encoding]::new($false)
@@ -103,6 +114,23 @@ function ConvertTo-WslPath {
     throw "Only Windows drive paths are supported: $fullPath"
 }
 
+function Resolve-WslConfigPath {
+    param([string]$PathValue)
+
+    $clean = $PathValue.Trim()
+    if ($clean.Length -eq 0) {
+        return "/root/.hermes/.env"
+    }
+
+    if ($clean -match "^([A-Za-z]):\\(.*)$") {
+        $drive = $Matches[1].ToLowerInvariant()
+        $rest = $Matches[2] -replace "\\", "/"
+        return "/mnt/$drive/$rest"
+    }
+
+    return $clean
+}
+
 function Quote-Bash {
     param([string]$Value)
     $escaped = $Value.Replace("'", "'\''")
@@ -119,6 +147,12 @@ function Test-GitRepo {
     }
 }
 
+function Test-ImageFile {
+    param([string]$File)
+    $extension = [IO.Path]::GetExtension($File).ToLowerInvariant()
+    return ($ImageExtensions -contains $extension)
+}
+
 function Get-GitReviewContent {
     param([string]$Root)
 
@@ -127,6 +161,13 @@ function Get-GitReviewContent {
     $names = & git -C $Root diff --name-only --cached -- . 2>$null
     $names += & git -C $Root diff --name-only -- . 2>$null
     $uniqueNames = @($names | Where-Object { $_ } | Sort-Object -Unique)
+    $imageFiles = @()
+    foreach ($name in $uniqueNames) {
+        $candidate = Join-Path $Root $name
+        if ((Test-Path -LiteralPath $candidate) -and (Test-ImageFile $candidate)) {
+            $imageFiles += (Get-Item -LiteralPath $candidate).FullName
+        }
+    }
 
     $parts = @()
     if ($staged) {
@@ -145,6 +186,7 @@ function Get-GitReviewContent {
         Text = ($parts -join "`n")
         FileCount = $uniqueNames.Count
         Files = $uniqueNames
+        ImageFiles = @($imageFiles | Sort-Object -Unique)
     }
 }
 
@@ -195,15 +237,21 @@ function Get-FileReviewContent {
 
     $binaryExtensions = @(
         ".pdf", ".doc", ".docx", ".xls", ".xlsx", ".ppt", ".pptx",
-        ".png", ".jpg", ".jpeg", ".gif", ".webp", ".zip", ".7z", ".rar",
+        ".gif", ".zip", ".7z", ".rar",
         ".vhdx", ".exe", ".dll"
     )
 
     $parts = @()
     $skipped = @()
+    $imageFiles = @()
 
     foreach ($file in $Files) {
         $extension = [IO.Path]::GetExtension($file).ToLowerInvariant()
+        if (Test-ImageFile $file) {
+            $imageFiles += $file
+            continue
+        }
+
         if ($binaryExtensions -contains $extension) {
             $skipped += $file
             continue
@@ -215,6 +263,17 @@ function Get-FileReviewContent {
         $parts += '```'
         $parts += $text
         $parts += '```'
+        $parts += ""
+    }
+
+    if ($imageFiles.Count -gt 0) {
+        $parts += "## IMAGE FILES AVAILABLE FOR VISION REVIEW"
+        foreach ($file in $imageFiles) {
+            $parts += "- WSL: $(ConvertTo-WslPath $file)"
+            $parts += "  Windows: $file"
+        }
+        $parts += ""
+        $parts += "These images are not inlined as text. When vision is enabled, the wrapper sends them to the configured vision model."
         $parts += ""
     }
 
@@ -232,6 +291,7 @@ function Get-FileReviewContent {
         Text = ($parts -join "`n")
         FileCount = $Files.Count
         Files = $Files
+        ImageFiles = @($imageFiles | Sort-Object -Unique)
     }
 }
 
@@ -239,6 +299,7 @@ function Get-PathOnlyReviewContent {
     param([string[]]$Files)
 
     $parts = @()
+    $imageFiles = @($Files | Where-Object { (Test-Path -LiteralPath $_) -and (Test-ImageFile $_) } | Sort-Object -Unique)
     $parts += "## FILE PATHS FOR HERMES INSPECTION"
     $parts += ""
     $parts += "Read only the parts of these files needed for the requested task."
@@ -250,11 +311,23 @@ function Get-PathOnlyReviewContent {
         $parts += "  Windows: $file"
     }
 
+    if ($imageFiles.Count -gt 0) {
+        $parts += ""
+        $parts += "## IMAGE FILES AVAILABLE FOR VISION REVIEW"
+        foreach ($file in $imageFiles) {
+            $parts += "- WSL: $(ConvertTo-WslPath $file)"
+            $parts += "  Windows: $file"
+        }
+        $parts += ""
+        $parts += "When vision is enabled, these images are sent to the configured vision model before later text-model passes."
+    }
+
     return [pscustomobject]@{
         Source = "file paths only"
         Text = ($parts -join "`n")
         FileCount = $Files.Count
         Files = $Files
+        ImageFiles = @($imageFiles)
     }
 }
 
@@ -408,6 +481,183 @@ function Get-ModelRouteSummary {
     return ($routes -join ", ")
 }
 
+function Write-VisionRunnerScript {
+    param([string]$Path)
+
+    $script = @'
+import argparse
+import base64
+import json
+import os
+import sys
+import urllib.error
+import urllib.request
+
+
+KNOWN_IMAGE_TYPES = {
+    ".png": "image/png",
+    ".jpg": "image/jpeg",
+    ".jpeg": "image/jpeg",
+    ".webp": "image/webp",
+}
+
+
+def load_env(path):
+    values = {}
+    if not os.path.exists(path):
+        return values
+    with open(path, "r", encoding="utf-8") as handle:
+        for raw in handle:
+            line = raw.strip()
+            if not line or line.startswith("#") or "=" not in line:
+                continue
+            key, value = line.split("=", 1)
+            values[key.strip()] = value.strip().strip('"').strip("'")
+    return values
+
+
+def read_text(path):
+    with open(path, "r", encoding="utf-8-sig") as handle:
+        return handle.read()
+
+
+def validate_image_bytes(path, data):
+    ext = os.path.splitext(path)[1].lower()
+    if ext not in KNOWN_IMAGE_TYPES:
+        raise ValueError(f"unsupported image extension: {ext}")
+    if ext == ".png" and not data.startswith(b"\x89PNG\r\n\x1a\n"):
+        raise ValueError("file does not look like a PNG image")
+    if ext in (".jpg", ".jpeg") and not data.startswith(b"\xff\xd8\xff"):
+        raise ValueError("file does not look like a JPEG image")
+    if ext == ".webp" and not (data.startswith(b"RIFF") and data[8:12] == b"WEBP"):
+        raise ValueError("file does not look like a WEBP image")
+    return KNOWN_IMAGE_TYPES[ext]
+
+
+def image_part(path):
+    with open(path, "rb") as handle:
+        data = handle.read()
+    mime = validate_image_bytes(path, data)
+    encoded = base64.b64encode(data).decode("ascii")
+    return {
+        "type": "image_url",
+        "image_url": {"url": f"data:{mime};base64,{encoded}"},
+    }
+
+
+def extract_text(data):
+    choice = data.get("choices", [{}])[0]
+    message = choice.get("message", {})
+    content = message.get("content", "")
+    if isinstance(content, str):
+        return content
+    if isinstance(content, list):
+        chunks = []
+        for item in content:
+            if isinstance(item, dict):
+                if "text" in item:
+                    chunks.append(str(item["text"]))
+                elif item.get("type") == "text" and "content" in item:
+                    chunks.append(str(item["content"]))
+            else:
+                chunks.append(str(item))
+        return "\n".join(chunks)
+    return str(content)
+
+
+def main():
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--manifest", required=True)
+    parser.add_argument("--prompt", required=True)
+    parser.add_argument("--model", required=True)
+    parser.add_argument("--max-image-bytes", type=int, required=True)
+    parser.add_argument("--env-file", default=os.environ.get("HERMES_ENV_PATH", "/root/.hermes/.env"))
+    args = parser.parse_args()
+
+    env = load_env(args.env_file)
+    key = os.environ.get("DASHSCOPE_API_KEY") or env.get("DASHSCOPE_API_KEY")
+    if not key:
+        print(f"DASHSCOPE_API_KEY is not set in {args.env_file} or the process environment.", file=sys.stderr)
+        return 2
+
+    base_url = os.environ.get("DASHSCOPE_BASE_URL") or env.get("DASHSCOPE_BASE_URL") or "https://dashscope.aliyuncs.com/compatible-mode/v1"
+    endpoint = base_url.rstrip("/") + "/chat/completions"
+
+    with open(args.manifest, "r", encoding="utf-8-sig") as handle:
+        manifest = json.load(handle)
+
+    prompt_text = read_text(args.prompt)
+    images = manifest.get("images", [])
+    vision_preamble = (
+        f"You are the vision sidecar running model {args.model}. "
+        "The review prompt below may mention separate Hermes text-pass models; do not report those as the vision model. "
+        "Inspect the attached image files directly and mention concrete visual evidence. "
+        "Do not claim an image was inspected if it was skipped."
+    )
+    content = [{"type": "text", "text": vision_preamble + "\n\n" + prompt_text}]
+
+    attached = 0
+    skipped = []
+    for image in images:
+        path = image["wsl"]
+        size = int(image.get("bytes", 0))
+        if size > args.max_image_bytes:
+            skipped.append(f"{path} ({size} bytes > limit {args.max_image_bytes})")
+            continue
+        try:
+            part = image_part(path)
+        except Exception as exc:
+            skipped.append(f"{path} ({exc})")
+            continue
+        content.append({"type": "text", "text": f"Image file: {path}"})
+        content.append(part)
+        attached += 1
+
+    if skipped:
+        content.append({"type": "text", "text": "Skipped oversized images:\n" + "\n".join(skipped)})
+
+    if attached == 0:
+        print("No image files were attached to the vision request.", file=sys.stderr)
+        return 1
+
+    body = {
+        "model": args.model,
+        "messages": [{"role": "user", "content": content}],
+        "temperature": 0.2,
+    }
+
+    request = urllib.request.Request(
+        endpoint,
+        data=json.dumps(body, ensure_ascii=False).encode("utf-8"),
+        headers={
+            "Authorization": f"Bearer {key}",
+            "Content-Type": "application/json",
+        },
+        method="POST",
+    )
+
+    try:
+        with urllib.request.urlopen(request, timeout=180) as response:
+            data = json.loads(response.read().decode("utf-8"))
+    except urllib.error.HTTPError as exc:
+        detail = exc.read().decode("utf-8", errors="replace")
+        print(f"Vision API HTTP {exc.code}: {detail}", file=sys.stderr)
+        return 1
+    except Exception as exc:
+        print(f"Vision API request failed: {exc}", file=sys.stderr)
+        return 1
+
+    print(extract_text(data))
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
+'@
+
+    [System.IO.File]::WriteAllText($Path, $script, [System.Text.UTF8Encoding]::new($false))
+}
+
 $resolvedRoot = Resolve-ProjectRoot $ProjectRoot
 $gitReview = $null
 $usePathOnly = ($PathOnly -or $Flow -eq "delegate")
@@ -465,11 +715,30 @@ if ($explicitModels.Count -gt 0) {
 }
 $selectedProvider = if ($Provider.Trim().Length -gt 0) { $Provider.Trim() } else { "auto" }
 $routeSummary = Get-ModelRouteSummary -ModelNames $models -RequestedProvider $Provider
+$imageFiles = @($review.ImageFiles)
+$resolvedVisionModel = Resolve-ModelAlias $VisionModel
+$resolvedHermesEnvPath = Resolve-WslConfigPath $HermesEnvPath
+$visionEnabled = ($Vision -ne "off" -and $imageFiles.Count -gt 0)
+$visionStatus = if ($visionEnabled) {
+    "enabled: $resolvedVisionModel via alibaba vision API"
+} elseif ($imageFiles.Count -gt 0) {
+    "off: image files were detected but will not be sent to a vision model"
+} elseif ($Vision -eq "on") {
+    "requested but no image files were detected"
+} else {
+    "not needed: no image files detected"
+}
+if ($Vision -eq "on" -and $imageFiles.Count -eq 0) {
+    Write-Warning "Vision was set to 'on', but no image files were detected in -Path or git diff."
+}
 
 $tempBase = Join-Path ([IO.Path]::GetTempPath()) ("hermes-review-" + [guid]::NewGuid().ToString("N"))
 $inputFile = "$tempBase.input.md"
 $promptFile = "$tempBase.prompt.md"
 $runnerFile = "$tempBase.runner.sh"
+$visionScriptFile = "$tempBase.vision.py"
+$visionManifestFile = "$tempBase.images.json"
+$visionResultFile = "$tempBase.vision-result.md"
 $defaultReportFile = "$tempBase.report.md"
 $reportShouldPersist = ($KeepReport -or $OutputPath.Trim().Length -gt 0)
 $resolvedOutputPath = Resolve-ReviewOutputPath -Root $resolvedRoot -RequestedPath $OutputPath -FallbackPath $defaultReportFile -UseProjectDefault $KeepReport
@@ -516,6 +785,8 @@ Review scope:
 - Selection reason: $selectionReason
 - Provider: $selectedProvider
 - Route(s): $routeSummary
+- Image files: $($imageFiles.Count)
+- Vision: $visionStatus
 - Lite mode: $Lite
 - Max findings: $MaxFindings
 - Opinion count: $OpinionCount
@@ -562,6 +833,8 @@ $reportHeader = @"
 - Selection reason: $selectionReason
 - Provider: $selectedProvider
 - Route(s): $routeSummary
+- Image files: $($imageFiles.Count)
+- Vision: $visionStatus
 - Task type: $TaskType
 - Created: $(Get-Date -Format "yyyy-MM-dd HH:mm:ss")
 
@@ -578,6 +851,11 @@ Write-Host "Files: $($review.FileCount)"
 Write-Host "Chars: $($review.Text.Length)"
 Write-Host "Provider: $selectedProvider"
 Write-Host "Routes: $routeSummary"
+Write-Host "Images: $($imageFiles.Count)"
+Write-Host "Vision: $visionStatus"
+if ($visionEnabled) {
+    Write-Host "Vision env: $resolvedHermesEnvPath"
+}
 Write-Host "Model(s): $modelSummary ($selectionReason)"
 Write-Host "Lite: $Lite"
 Write-Host "PathOnly: $usePathOnly"
@@ -593,10 +871,27 @@ if ($KeepTemp) {
     Write-Host "Temporary files will be kept after Hermes exits."
 }
 
+if ($visionEnabled) {
+    $visionEntries = foreach ($imageFile in $imageFiles) {
+        $item = Get-Item -LiteralPath $imageFile
+        [pscustomobject]@{
+            windows = $item.FullName
+            wsl = ConvertTo-WslPath $item.FullName
+            bytes = $item.Length
+        }
+    }
+    $visionManifest = [pscustomobject]@{
+        images = @($visionEntries)
+    }
+    [System.IO.File]::WriteAllText($visionManifestFile, ($visionManifest | ConvertTo-Json -Depth 6), [System.Text.UTF8Encoding]::new($false))
+    [System.IO.File]::WriteAllText($visionResultFile, "", [System.Text.UTF8Encoding]::new($false))
+    Write-VisionRunnerScript -Path $visionScriptFile
+}
+
 if ($NoRun) {
     Write-Host "NoRun set; Hermes was not called."
     if (-not $KeepTemp) {
-        Remove-Item -LiteralPath $inputFile, $promptFile, $runnerFile -Force -ErrorAction SilentlyContinue
+        Remove-Item -LiteralPath $inputFile, $promptFile, $runnerFile, $visionScriptFile, $visionManifestFile, $visionResultFile -Force -ErrorAction SilentlyContinue
     }
     if (-not $reportShouldPersist) {
         Remove-Item -LiteralPath $resolvedOutputPath -Force -ErrorAction SilentlyContinue
@@ -607,10 +902,21 @@ if ($NoRun) {
 $wslProject = ConvertTo-WslPath $resolvedRoot
 $wslPrompt = ConvertTo-WslPath $promptFile
 $wslOutput = ConvertTo-WslPath $resolvedOutputPath
+$wslVisionScript = if ($visionEnabled) { ConvertTo-WslPath $visionScriptFile } else { "" }
+$wslVisionManifest = if ($visionEnabled) { ConvertTo-WslPath $visionManifestFile } else { "" }
+$wslVisionResult = if ($visionEnabled) { ConvertTo-WslPath $visionResultFile } else { "" }
+$wslHermesEnv = if ($visionEnabled) { $resolvedHermesEnvPath } else { "" }
 
 & wsl.exe -d $WslDistro -- bash -lc 'export PATH="$HOME/.local/bin:$PATH"; command -v hermes >/dev/null'
 if ($LASTEXITCODE -ne 0) {
     Write-Error "Hermes CLI was not found in WSL distro '$WslDistro'. Confirm the distro name with 'wsl -l -v' and make sure 'hermes' is on PATH inside WSL."
+}
+
+if ($visionEnabled) {
+    & wsl.exe -d $WslDistro -- bash -lc 'export PATH="$HOME/.local/bin:$PATH"; command -v python3 >/dev/null'
+    if ($LASTEXITCODE -ne 0) {
+        Write-Error "python3 was not found in WSL distro '$WslDistro'. Vision review requires Python 3 inside WSL."
+    }
 }
 
 $liteArgs = ""
@@ -621,6 +927,22 @@ if ($Lite) {
 $cdLine = "cd $(Quote-Bash $wslProject)"
 $promptLine = "prompt=`$(cat $(Quote-Bash $wslPrompt))"
 $runLines = @("status=0")
+if ($visionEnabled) {
+    $quotedVisionModel = Quote-Bash $resolvedVisionModel
+    $quotedVisionScript = Quote-Bash $wslVisionScript
+    $quotedVisionManifest = Quote-Bash $wslVisionManifest
+    $quotedVisionPrompt = Quote-Bash $wslPrompt
+    $quotedVisionOutput = Quote-Bash $wslOutput
+    $quotedVisionResult = Quote-Bash $wslVisionResult
+    $quotedHermesEnv = Quote-Bash $wslHermesEnv
+    $maxImageBytes = $MaxImageMb * 1MB
+    $runLines += "printf '\n\n---\n\n## Hermes vision pass: %s (alibaba)\n\n' $quotedVisionModel | tee -a $quotedVisionOutput"
+    $runLines += "python3 $quotedVisionScript --manifest $quotedVisionManifest --prompt $quotedVisionPrompt --model $quotedVisionModel --max-image-bytes $maxImageBytes --env-file $quotedHermesEnv 2>&1 | tee $quotedVisionResult | tee -a $quotedVisionOutput"
+    $runLines += 'cmd_status=${PIPESTATUS[0]}; if [ "$cmd_status" -ne 0 ] && [ "$status" -eq 0 ]; then status="$cmd_status"; fi'
+    $runLines += 'if [ -s ' + $quotedVisionResult + ' ]; then'
+    $runLines += '  prompt="$(printf "%s\n\n## Vision sidecar result\n\n%s" "$prompt" "$(cat ' + $quotedVisionResult + ')")"'
+    $runLines += 'fi'
+}
 foreach ($runModel in $models) {
     $quotedModel = Quote-Bash $runModel
     $runProvider = Select-HermesProvider -ModelName $runModel -RequestedProvider $Provider
@@ -649,7 +971,7 @@ Write-Host "Running Hermes..."
 $hermesExitCode = $LASTEXITCODE
 
 if (-not $KeepTemp) {
-    Remove-Item -LiteralPath $inputFile, $promptFile, $runnerFile -Force -ErrorAction SilentlyContinue
+    Remove-Item -LiteralPath $inputFile, $promptFile, $runnerFile, $visionScriptFile, $visionManifestFile, $visionResultFile -Force -ErrorAction SilentlyContinue
 }
 
 if (-not $reportShouldPersist) {

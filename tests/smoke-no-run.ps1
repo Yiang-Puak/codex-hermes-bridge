@@ -176,6 +176,78 @@ if ($directoryText -notmatch "Skipping directory path" -or $directoryText -notma
     throw "Directory path did not produce the expected warning and error."
 }
 
+Write-Host ""
+Write-Host "Smoke 8: image path enables vision in dry run"
+$samplePng = Join-Path ([IO.Path]::GetTempPath()) ("hermes-vision-smoke-" + [guid]::NewGuid().ToString("N") + ".png")
+[IO.File]::WriteAllBytes($samplePng, [Convert]::FromBase64String("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg=="))
+try {
+    $visionOutput = & powershell -NoProfile -ExecutionPolicy Bypass -File $Tool `
+        -Flow delegate `
+        -Lite `
+        -PathOnly `
+        -ProjectRoot $RepoRoot `
+        -TaskType code `
+        -Path $samplePng `
+        -Model "qwen-flash" `
+        -ExtraPrompt "Smoke test only. Confirm vision dry-run routing is wired." `
+        -NoRun 2>&1
+    $visionExit = $LASTEXITCODE
+    $visionText = ($visionOutput -join "`n")
+    Write-Host $visionText
+    if ($visionExit -ne 0) {
+        throw "Vision dry run failed with exit code $visionExit"
+    }
+    if ($visionText -notmatch "Images: 1" -or $visionText -notmatch "Vision: enabled: qwen3\.7-plus via alibaba vision API") {
+        throw "Image path did not enable the expected vision route."
+    }
+
+    Write-Host ""
+    Write-Host "Smoke 9: image path honors -Vision off"
+    $visionOffOutput = & powershell -NoProfile -ExecutionPolicy Bypass -File $Tool `
+        -Flow delegate `
+        -Lite `
+        -PathOnly `
+        -ProjectRoot $RepoRoot `
+        -TaskType code `
+        -Path $samplePng `
+        -Vision off `
+        -ExtraPrompt "Smoke test only. Confirm vision can be disabled." `
+        -NoRun 2>&1
+    $visionOffExit = $LASTEXITCODE
+    $visionOffText = ($visionOffOutput -join "`n")
+    Write-Host $visionOffText
+    if ($visionOffExit -ne 0) {
+        throw "Vision-off dry run failed with exit code $visionOffExit"
+    }
+    if ($visionOffText -notmatch "Images: 1" -or $visionOffText -notmatch "Vision: off: image files were detected") {
+        throw "-Vision off did not disable the vision route as expected."
+    }
+} finally {
+    Remove-Item -LiteralPath $samplePng -Force -ErrorAction SilentlyContinue
+}
+
+Write-Host ""
+Write-Host "Smoke 10: -Vision on without images warns but does not fail"
+$visionOnOutput = & powershell -NoProfile -ExecutionPolicy Bypass -File $Tool `
+    -Flow delegate `
+    -Lite `
+    -PathOnly `
+    -ProjectRoot $RepoRoot `
+    -TaskType code `
+    -Path $Tool `
+    -Vision on `
+    -ExtraPrompt "Smoke test only. Confirm explicit vision-on warns without images." `
+    -NoRun 2>&1
+$visionOnExit = $LASTEXITCODE
+$visionOnText = ($visionOnOutput -join "`n")
+Write-Host $visionOnText
+if ($visionOnExit -ne 0) {
+    throw "Vision-on without images dry run failed with exit code $visionOnExit"
+}
+if ($visionOnText -notmatch "Vision was set to 'on'" -or $visionOnText -notmatch "Images: 0") {
+    throw "-Vision on without images did not produce the expected warning/state."
+}
+
 $repoReportDir = Join-Path $RepoRoot ".codex-hermes-reviews"
 if (Test-Path -LiteralPath $repoReportDir) {
     throw "Smoke test should not create persistent report directory: $repoReportDir"
