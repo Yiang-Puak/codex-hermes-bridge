@@ -119,6 +119,12 @@ if ($opinionExit -ne 0) {
 if ($opinionText -notmatch "Model\(s\): qwen3\.6-flash, qwen3\.7-plus, deepseek-v4-flash, glm-5\.2, deepseek-v4-pro") {
     throw "OpinionCount 5 did not select the expected model roster."
 }
+if ($opinionText -notmatch "Approx total input tokens") {
+    throw "OpinionCount dry run did not print a total input token estimate."
+}
+if ($opinionText -notmatch "This run will call 5 text models sequentially" -or $opinionText -notmatch "consider -OpinionCount 3") {
+    throw "OpinionCount 5 did not print the expected non-blocking budget warning."
+}
 
 Write-Host ""
 Write-Host "Smoke 6: -Model and -Models conflict fails"
@@ -275,6 +281,9 @@ try {
     $pathOnlyPromptContent = Get-Content -LiteralPath $pathOnlyPromptPath -Raw -Encoding UTF8
     if ($pathOnlyPromptContent -notmatch "READ_FAILED" -or $pathOnlyPromptContent -notmatch "do not infer content from the filename") {
         throw "Path-only prompt did not include the expected anti-fake-read instruction."
+    }
+    if ($pathOnlyPromptContent -notmatch "Reason from first principles" -or $pathOnlyPromptContent -notmatch "\[Severity: CRITICAL\|HIGH\|MEDIUM\|LOW\]" -or $pathOnlyPromptContent -notmatch "Principle:" -or $pathOnlyPromptContent -notmatch "Evidence:" -or $pathOnlyPromptContent -notmatch "Action:") {
+        throw "Path-only prompt did not include the expected first-principles evidence format."
     }
 } finally {
     $prefix = $pathOnlyPromptPath -replace "\.prompt\.md$", ""

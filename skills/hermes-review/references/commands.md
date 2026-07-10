@@ -76,7 +76,9 @@ In `-Flow delegate`, `-Mode auto` intentionally starts from `qwen3.6-flash`. Del
 
 ## Material Preview
 
-Before calling Hermes, the wrapper prints the material mode, delivery mode, material character count, prompt character count, approximate input tokens per text pass, and text pass count. The token preview is a rough char/4 English estimate; Chinese, code, mixed text, tokenizer behavior, and vision-result prompt enrichment can make the final provider-side count higher.
+Before calling Hermes, the wrapper prints the material mode, delivery mode, material character count, prompt character count, CJK character count, approximate input tokens per text pass, approximate total input tokens across text passes, and text pass count. The token preview is a rough mixed CJK/code heuristic, not a provider billing tokenizer; provider-side tokens, output tokens, and appended vision-result text can still differ. Runs with three or more text models print a non-blocking budget warning.
+
+Hermes findings should be evidence-based and reasoned from first principles: objective or invariant, concrete evidence, why it matters, and a concrete action. Treat findings without evidence as leads to verify, not facts to accept.
 
 ## Vision Notes
 

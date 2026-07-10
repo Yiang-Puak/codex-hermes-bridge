@@ -15,7 +15,8 @@ Use Chinese for project communication unless the manuscript or target journal re
    `powershell -NoProfile -ExecutionPolicy Bypass -File "<codex-hermes-bridge>\tools\hermes-review.ps1" -ProjectRoot "<project-root>" -TaskType paper -Path "<changed-file>"`
 8. Default post-change review is hybrid: the wrapper sends git diff plus changed-file paths. For PathOnly/path-based review, Hermes must return `READ_FAILED` instead of guessing if a needed file cannot be read.
 9. Use `qwen3.6-flash` for ordinary language, format, and narrow citation checks. Use `qwen3.7-plus` for paper logic, experimental claims, result interpretation, figure/table consistency, final checks, or multi-file changes. Use `-OpinionCount 3` for Qwen flash, Qwen pro, and DeepSeek flash; `-OpinionCount 4` adds GLM; `-OpinionCount 5` adds DeepSeek pro.
-10. For figures, screenshots, or image files, pass the image with `-Path`; the wrapper uses `-Vision auto` and `qwen3.7-plus` by default for direct visual review.
-11. Use `-Models` for exact user-requested combinations, such as DeepSeek flash plus Qwen flash.
-12. Do not persist Markdown reports unless the user asks. Relay Hermes findings in the final response and let the wrapper delete its temporary report.
-13. Treat Hermes as independent input, not automatic truth. Codex must verify findings before changing files or accepting conclusions.
+10. Hermes findings should use the same first-principles format: objective or invariant, concrete evidence, why it matters, and a concrete action. For paper work, emphasize claim objective, evidence boundary, and source/quote/line when available. Treat unsupported findings as leads to verify, not facts.
+11. For figures, screenshots, or image files, pass the image with `-Path`; the wrapper uses `-Vision auto` and `qwen3.7-plus` by default for direct visual review.
+12. Use `-Models` for exact user-requested combinations, such as DeepSeek flash plus Qwen flash.
+13. Do not persist Markdown reports unless the user asks. Relay Hermes findings in the final response and let the wrapper delete its temporary report.
+14. Treat Hermes as independent input, not automatic truth. Codex must verify findings before changing files or accepting conclusions.

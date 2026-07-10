@@ -153,6 +153,35 @@ function Test-ImageFile {
     return ($ImageExtensions -contains $extension)
 }
 
+function Get-TokenEstimate {
+    param([string]$Text)
+
+    $totalChars = $Text.Length
+    if ($totalChars -eq 0) {
+        return [pscustomobject]@{
+            Chars = 0
+            CjkChars = 0
+            NonCjkChars = 0
+            EnglishBaseline = 0
+            MixedEstimate = 0
+        }
+    }
+
+    $cjkPattern = '[\u3400-\u9FFF\uF900-\uFAFF\u3040-\u30FF\uAC00-\uD7AF]'
+    $cjkChars = ([regex]::Matches($Text, $cjkPattern)).Count
+    $nonCjkChars = [Math]::Max(0, $totalChars - $cjkChars)
+    $englishBaseline = [math]::Ceiling($totalChars / 4.0)
+    $mixedEstimate = [math]::Ceiling($cjkChars + ($nonCjkChars / 4.0))
+
+    return [pscustomobject]@{
+        Chars = $totalChars
+        CjkChars = $cjkChars
+        NonCjkChars = $nonCjkChars
+        EnglishBaseline = $englishBaseline
+        MixedEstimate = [Math]::Max($englishBaseline, $mixedEstimate)
+    }
+}
+
 function Get-GitReviewContent {
     param([string]$Root)
 
@@ -792,11 +821,18 @@ if ($Flow -eq "delegate") {
     $roleLine = "You are a lightweight Hermes-first delegate. Complete the requested check directly, using the provided file paths when relevant."
     $flowInstructions = @"
 1. Do the requested task directly and inspect only the necessary parts of the provided files.
-2. Prefer concise, concrete findings over broad review commentary.
-3. Do not rewrite files unless explicitly requested.
-4. If your conclusion depends on a provided path, read that file first. If a file cannot be read, return READ_FAILED with the path and do not infer content from the filename.
-5. Return at most $MaxFindings findings. If there are more, list the most important ones and say how many remain.
-6. Use this format:
+2. Reason from first principles: state the task objective, the relevant constraint or invariant, the available evidence, the failure mode, and the smallest useful action.
+3. Prefer concise, concrete findings over broad review commentary.
+4. Do not rewrite files unless explicitly requested.
+5. If your conclusion depends on a provided path, read that file first. If a file cannot be read, return READ_FAILED with the path and do not infer content from the filename.
+6. Return at most $MaxFindings findings. If there are more, list the most important ones and say how many remain.
+7. For each material finding, use this evidence format:
+   Finding N: [Severity: CRITICAL|HIGH|MEDIUM|LOW] [Category: Bug|Logic|Evidence|Style|Missing Test|Security|Performance|Other] one-line summary
+   Principle: the objective, invariant, or constraint being violated.
+   Evidence: file/path/line, exact quote, command output, or concrete visual observation. If evidence is unavailable, write "Evidence: not available" and lower confidence.
+   Why it matters: one or two sentences.
+   Action: one concrete next step.
+8. Then include:
    - Model used
    - Findings
    - Residual risks
@@ -806,13 +842,20 @@ if ($Flow -eq "delegate") {
     $roleLine = "You are an independent reviewer for Codex output."
     $flowInstructions = @"
 1. Focus on concrete problems only: bugs, regressions, unsupported scientific claims, evidence mismatch, missing tests, broken formatting, reproducibility risk, and maintainability issues.
-2. For paper work, check logic, claim strength, terminology consistency, figure/table/text consistency, citation/evidence boundaries, and whether any new statement needs user confirmation.
-3. For code work, check correctness, edge cases, tests, API contracts, dependencies, security-sensitive behavior, and user-facing regressions.
-4. Do not rewrite the whole work. Return findings ordered by severity.
-5. If the diff lacks enough context, use the provided changed-file paths to inspect full files. If a needed file cannot be read, return READ_FAILED with the path and do not infer content from the filename.
-6. If there are no material issues, say so clearly and mention residual risk or missing validation.
-7. Return at most $MaxFindings findings. If there are more, list the most important ones and say how many remain.
-8. Use this format:
+2. Reason from first principles: state the task objective, the relevant constraint or invariant, the available evidence, the failure mode, and the smallest useful action.
+3. For paper work, check logic, claim strength, terminology consistency, figure/table/text consistency, citation/evidence boundaries, and whether any new statement needs user confirmation.
+4. For code work, check correctness, edge cases, tests, API contracts, dependencies, security-sensitive behavior, and user-facing regressions.
+5. Do not rewrite the whole work. Return findings ordered by severity.
+6. If the diff lacks enough context, use the provided changed-file paths to inspect full files. If a needed file cannot be read, return READ_FAILED with the path and do not infer content from the filename.
+7. If there are no material issues, say so clearly and mention residual risk or missing validation.
+8. Return at most $MaxFindings findings. If there are more, list the most important ones and say how many remain.
+9. For each material finding, use this evidence format:
+   Finding N: [Severity: CRITICAL|HIGH|MEDIUM|LOW] [Category: Bug|Logic|Evidence|Style|Missing Test|Security|Performance|Other] one-line summary
+   Principle: the objective, invariant, or constraint being violated.
+   Evidence: file/path/line, exact quote, command output, or concrete visual observation. If evidence is unavailable, write "Evidence: not available" and lower confidence.
+   Why it matters: one or two sentences.
+   Action: one concrete next step.
+10. Then include:
    - Model used
    - Findings
    - Residual risks
@@ -871,8 +914,16 @@ Read that file before reviewing.
 
 Set-Content -LiteralPath $promptFile -Value $prompt -Encoding UTF8
 $promptCharCount = $prompt.Length
-$approxInputTokensPerPass = [math]::Ceiling($promptCharCount / 4.0)
-$tokenEstimateNote = "rough char/4 English estimate; actual provider tokens may be higher for Chinese, code, and mixed text"
+$tokenEstimate = Get-TokenEstimate -Text $prompt
+$approxInputTokensPerPass = $tokenEstimate.MixedEstimate
+$englishBaselineTokensPerPass = $tokenEstimate.EnglishBaseline
+$estimatedTotalInputTokens = $approxInputTokensPerPass * $models.Count
+$tokenEstimateNote = "rough mixed CJK/code heuristic, not a billing tokenizer; actual provider tokens and output tokens may differ"
+$tokenScopeNote = if ($visionEnabled) {
+    "before output tokens; vision-result text is excluded, so image-heavy reviews may be higher"
+} else {
+    "before output tokens"
+}
 
 $reportHeader = @"
 # Hermes Review Report
@@ -884,7 +935,10 @@ $reportHeader = @"
 - Prompt delivery: $promptDelivery
 - Material characters: $($review.Text.Length)
 - Prompt characters: $promptCharCount
+- Prompt CJK characters: $($tokenEstimate.CjkChars)
 - Approx input tokens per text pass: ~$approxInputTokensPerPass ($tokenEstimateNote)
+- English char/4 baseline per text pass: ~$englishBaselineTokensPerPass
+- Approx total input tokens across text passes: ~$estimatedTotalInputTokens ($tokenScopeNote)
 - Text model passes: $($models.Count)
 - Model(s): $modelSummary
 - Selection reason: $selectionReason
@@ -909,7 +963,9 @@ Write-Host "Material: $materialMode"
 Write-Host "Delivery: $promptDelivery"
 Write-Host "Material chars: $($review.Text.Length)"
 Write-Host "Prompt chars: $promptCharCount"
-Write-Host "Approx input tokens/pass: ~$approxInputTokensPerPass ($tokenEstimateNote)"
+Write-Host "Prompt CJK chars: $($tokenEstimate.CjkChars)"
+Write-Host "Approx input tokens/pass: ~$approxInputTokensPerPass (char/4 baseline ~$englishBaselineTokensPerPass; $tokenEstimateNote)"
+Write-Host "Approx total input tokens: ~$estimatedTotalInputTokens across $($models.Count) text pass(es), $tokenScopeNote"
 Write-Host "Text passes: $($models.Count)"
 Write-Host "Provider: $selectedProvider"
 Write-Host "Routes: $routeSummary"
@@ -931,6 +987,12 @@ if ($reportShouldPersist) {
 }
 if ($KeepTemp) {
     Write-Host "Temporary files will be kept after Hermes exits."
+}
+if ($models.Count -ge 3) {
+    Write-Warning "This run will call $($models.Count) text models sequentially. Estimated total input tokens: ~$estimatedTotalInputTokens $tokenScopeNote."
+    if ($models.Count -ge 5) {
+        Write-Warning "For a cheaper review, consider -OpinionCount 3 or reducing the model list."
+    }
 }
 
 if ($visionEnabled) {

@@ -29,6 +29,8 @@ Run local deterministic checks first when available, such as tests, lint, builds
 
 Default post-change review is hybrid: the wrapper sends git diff plus changed-file paths so Hermes can read full files when diff context is insufficient. For `-PathOnly` and other path-based prompts, Hermes must return `READ_FAILED` instead of guessing if a needed file cannot be read.
 
+Ask Hermes to reason from first principles when the task involves review quality: objective or invariant, concrete evidence, why it matters, and a concrete action. When relaying results, accept evidence-backed findings first and mark unsupported findings as leads to verify.
+
 ## Commands
 
 For a lightweight delegate check:
