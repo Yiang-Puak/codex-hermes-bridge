@@ -1,4 +1,6 @@
 interface:
   display_name: "Hermes Review"
-  short_description: "Delegate/review with Hermes via Bailian models"
-  default_prompt: "Use $hermes-review to run a lightweight Hermes-first check or an independent review."
+  short_description: "Codex-Hermes review bridge"
+  default_prompt: "Use $hermes-review for Hermes-first checks or independent review in projects that request Hermes."
+policy:
+  allow_implicit_invocation: true

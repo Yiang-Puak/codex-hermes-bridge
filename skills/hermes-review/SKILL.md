@@ -1,11 +1,13 @@
 ---
 name: hermes-review
-description: Use when Codex should delegate a lightweight check or run an independent review through a local Hermes CLI wrapper, especially for Hermes-first Qwen flash checks, Qwen pro paper review, image/figure/screenshot review through a Bailian vision sidecar, GLM coding review, mixed Qwen/DeepSeek/GLM multi-opinion review, path-only/token-saving inspection, non-persistent Markdown reports, or Codex-plus-Hermes workflows for papers and coding projects.
+description: Use automatically when project instructions or the user request Hermes, hermes-review.ps1, Codex-Hermes bridge, Hermes-first checks, post-change Hermes review, reference/citation audits, figure/image review, or multi-model Hermes opinions. Runs lightweight checks or independent reviews through the local Hermes CLI wrapper with temporary reports and first-principles evidence-based findings.
 ---
 
 # Hermes Review
 
 Use this skill to let Codex coordinate with a local Hermes CLI reviewer/delegate through `hermes-review.ps1`.
+
+When this skill is triggered by project instructions or the user asks for Hermes review, call the wrapper directly after the relevant Codex work unless the user explicitly says not to. Skip Hermes when there is no file/material change or no useful independent check. Use `-NoRun` only for setup validation or smoke tests.
 
 ## Wrapper
 
