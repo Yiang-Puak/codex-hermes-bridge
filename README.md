@@ -121,12 +121,3 @@ powershell -NoProfile -ExecutionPolicy Bypass -File ".\tests\smoke-no-run.ps1"
 ```
 
 smoke 不消耗模型 token，验证论文顺序与隔离、强模型代码角色、Git untracked/deleted 收集、coverage、敏感内容拒绝和临时文件策略。
-
-## 简洁性约束
-
-- Skill 目录是唯一实现源码。
-- 顶层 wrapper 必须保持在 10 行以内。
-- 主脚本目标不超过 900 行；smoke 不超过 250 行。
-- 只允许一个 profile 配置和一个结果 schema。
-- 不提交生成副本，不为每个版本新建迁移文档。
-- 不加入 MCP、daemon、数据库、任务队列、Web UI 或 wrapper 内第二轮模型共识。
