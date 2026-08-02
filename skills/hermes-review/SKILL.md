@@ -1,74 +1,39 @@
 ---
 name: hermes-review
-description: Use automatically when project instructions or the user request Hermes, hermes-review.ps1, Codex-Hermes bridge, Hermes-first checks, post-change Hermes review, reference/citation audits, figure/image review, or multi-model Hermes opinions. Runs lightweight checks or independent reviews through the local Hermes CLI wrapper with temporary reports and first-principles evidence-based findings.
+description: Use automatically when the user or project requests Hermes, Codex-Hermes review, independent paper review, post-change code review, citation/figure audits, or multiple Hermes opinions. Runs one immutable bundle through isolated reviewers and leaves semantic synthesis to Codex.
 ---
 
 # Hermes Review
 
-Use this skill to let Codex coordinate with a local Hermes CLI reviewer/delegate through `hermes-review.ps1`.
+Use project `tools/hermes-review.ps1` when present; otherwise use this Skill's `scripts/hermes-review.ps1`. Run deterministic tests/builds first. Use `-NoRun` only for plumbing checks.
 
-When this skill is triggered by project instructions or the user asks for Hermes review, call the wrapper directly after the relevant Codex work unless the user explicitly says not to. Skip Hermes when there is no file/material change or no useful independent check. Use `-NoRun` only for setup validation or smoke tests.
+Choose one preset:
 
-## Wrapper
+- `delegate`: bounded formatting, inventory, summary, or narrow checks.
+- `paper`: DeepSeek Pro, DeepSeek Flash, and Qwen Plus each review the complete explicit paper package independently.
+- `paper-deep`: five independent whole-package paper reviews.
+- `code`: one strong global GLM review.
+- `code-deep`: strong global, security, and correctness/tests reviews; every reviewer sees the complete bundle.
 
-Find the wrapper in this order:
+Paper presets require explicit `-Path` files. Never divide a manuscript into model-specific sections or reveal peer identities/outputs. For code presets without `-Path`, the wrapper collects staged, unstaged, deleted, and untracked Git material.
 
-1. Project-local `tools/hermes-review.ps1`.
-2. This skill's bundled `scripts/hermes-review.ps1`.
-3. A user-provided wrapper path.
-
-If no wrapper is available, ask the user for the path instead of inventing one.
-
-## Workflow
-
-Classify the task before calling Hermes:
-
-- Use **Hermes-first flash** for simple checks that can save Codex context: citation counts, formatting scans, file lists, obvious consistency checks, error summaries, spelling scans, and narrow grep-like audits.
-- Use **Codex-led then Hermes review** for paper logic, claim strength, scientific evidence boundaries, figure/table consistency, code implementation, architecture/API/database/auth/dependency changes, complex debugging, and final handoff checks.
-- Skip Hermes for simple explanations, brainstorming, or tasks where no files changed and no independent check is useful.
-
-Run local deterministic checks first when available, such as tests, lint, builds, LaTeX compilation, or file-existence checks. Then call Hermes for model-based review.
-
-Default post-change review is hybrid: the wrapper sends git diff plus changed-file paths so Hermes can read full files when diff context is insufficient. For `-PathOnly` and other path-based prompts, Hermes must return `READ_FAILED` instead of guessing if a needed file cannot be read.
-
-Ask Hermes to reason from first principles when the task involves review quality: objective or invariant, concrete evidence, why it matters, and a concrete action. When relaying results, accept evidence-backed findings first and mark unsupported findings as leads to verify.
-
-## Commands
-
-For a lightweight delegate check:
+Commands:
 
 ```powershell
 powershell -NoProfile -ExecutionPolicy Bypass -File "<wrapper>" `
-  -Flow delegate -Lite -Mode flash -PathOnly -MaxFindings 8 `
-  -ProjectRoot "<project-root>" -TaskType code `
-  -Path "<file>" -ExtraPrompt "<specific check>"
+  -Preset paper -Concurrency 3 -ProjectRoot "<root>" -Path "<main>","<supplement>" `
+  -Prompt "审查完整逻辑、数字、证据边界和可推广性。"
 ```
-
-For a paper delegate check, use `-TaskType paper`.
-
-For an independent review after Codex changes:
 
 ```powershell
 powershell -NoProfile -ExecutionPolicy Bypass -File "<wrapper>" `
-  -Mode auto -TaskType code -ProjectRoot "<project-root>" `
-  -Path "<changed-file>"
+  -Preset code-deep -ProjectRoot "<root>" -Prompt "审查本轮全部改动。"
 ```
 
-Use `-Mode pro` when the review involves paper logic, claim strength, result interpretation, final submission checks, or high-risk non-code changes. For high-risk code work, `-Mode auto -TaskType code` selects GLM. Use `-Mode flash` for ordinary language, format, and small single-file checks. Use `-OpinionCount 3` for Qwen flash, Qwen pro, and DeepSeek flash; `-OpinionCount 4` adds GLM; `-OpinionCount 5` adds DeepSeek pro. Use `-Models` when the user asks for exact model combinations such as DeepSeek flash plus Qwen flash.
+Images remain local unless both `-Vision shared` and `-AllowImageUpload` are supplied. Reports are temporary unless `-KeepReport` or `-OutputPath` is explicit.
 
-For image, figure, or screenshot checks, pass the image file with `-Path`. The wrapper uses `-Vision auto` by default and sends `.png`, `.jpg`, `.jpeg`, and `.webp` files to `qwen3.7-plus` through the Bailian vision sidecar. Use `-Vision off` when the user only wants path/text review and no image upload.
+For a paper panel, use `-Concurrency 3` so all three independent reviewers launch together. For a real run, keep polling the same terminal session until it prints `Reviewer states:` followed by the JSON result. `Hermes review prepared`, `Running Hermes...`, and WSL non-fatal-diagnostics messages are progress only, not a result; completion is determined by the final reviewer states and runner exit code.
 
-For exact parameter behavior, read `references/commands.md`.
+Keep implementation changes surgical: state assumptions, prefer existing files/configuration, avoid speculative abstractions, and define a testable success condition before editing. Treat only `runStatus=completed` with every reviewer `completed` as a valid result.
 
-## Reporting
-
-Relay Hermes output to the user instead of saving long-lived reports. Include:
-
-- model used
-- material findings
-- what Codex accepted or rejected after verification
-- remaining risk or skipped validation
-
-The wrapper deletes its temporary Markdown report by default. Use `-KeepReport` or `-OutputPath` only when the user explicitly asks for an artifact.
-
-Keep Hermes prompts narrow. Prefer `-PathOnly`, `-Lite`, and `-MaxFindings` for token control when the task is simple.
+After all reviewers finish, Codex—not the wrapper—must group semantic consensus, identify disagreements, verify evidence against the bundle, reject unsupported calculations, and report accepted findings plus residual risk.

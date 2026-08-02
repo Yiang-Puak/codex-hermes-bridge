@@ -1,6 +1,6 @@
 interface:
   display_name: "Hermes Review"
-  short_description: "Codex-Hermes review bridge"
-  default_prompt: "Use $hermes-review for Hermes-first checks or independent review in projects that request Hermes."
+  short_description: "Independent paper and code review bridge"
+  default_prompt: "Use $hermes-review with one preset: paper reviewers inspect the whole package independently, code review uses strong models, and Codex performs the final evidence synthesis."
 policy:
   allow_implicit_invocation: true

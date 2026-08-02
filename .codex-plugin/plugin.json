@@ -1,0 +1,24 @@
+{
+  "name": "codex-hermes-bridge",
+  "version": "0.3.0",
+  "description": "Independent Hermes review routing for Codex paper and code workflows.",
+  "author": {
+    "name": "Codex Hermes Bridge"
+  },
+  "license": "MIT",
+  "keywords": ["codex", "hermes", "review", "paper", "code-review"],
+  "skills": "./skills/",
+  "interface": {
+    "displayName": "Codex Hermes Bridge",
+    "shortDescription": "Independent multi-model review workflows",
+    "longDescription": "Run evidence-based independent Hermes reviews for papers and code, then let Codex verify the findings.",
+    "developerName": "Codex Hermes Bridge",
+    "category": "Engineering",
+    "capabilities": ["Interactive"],
+    "defaultPrompt": [
+      "Use the code-deep Hermes preset to independently review this change.",
+      "Run the paper Hermes preset over the complete manuscript package.",
+      "Use the delegate Hermes preset for this bounded check."
+    ]
+  }
+}

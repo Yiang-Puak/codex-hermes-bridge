@@ -1,22 +1,19 @@
-# Codex Paper Workflow With Hermes
+# Codex + Hermes 论文规则
 
-Use Chinese for project communication unless the manuscript or target journal requires English. Preserve scientific meaning, citation keys, numerical results, equations, table values, and terminology.
+保持科学含义、引用键、数值、公式、表格值和术语。修改后先运行 LaTeX、引用键或用户指定的确定性检查。
 
-## Hermes Independent Review
+修改保持手术式和最小化：先说明假设与证据边界，不新增与论文目标无关的结构，不顺手重写无关章节；每一处改动都要有可验证的成功条件。
 
-1. Use Hermes-first for simple checks: citation counts, formatting scans, spelling scans, obvious consistency checks, file lists, and narrow reference audits. Prefer Hermes flash with path-only input so Codex does not need to read large files first.
-2. Hermes-first default command:
-   `powershell -NoProfile -ExecutionPolicy Bypass -File "<codex-hermes-bridge>\tools\hermes-review.ps1" -Flow delegate -Lite -Mode flash -PathOnly -MaxFindings 8 -ProjectRoot "<project-root>" -TaskType paper -Path "<file>" -ExtraPrompt "<specific check>"`
-3. Use Codex-led work followed by Hermes review for manuscript logic, claim strength, evidence boundaries, result interpretation, figure/table consistency, citation/evidence fit, and final submission checks.
-4. Run deterministic local checks first when available, such as LaTeX compilation, file existence checks, citation key scans, or user-requested scripts.
-5. After a meaningful manuscript edit, call Hermes before the final response. Small edits may be batched into one review.
-6. In non-git projects, pass the changed `.tex`, `.bib`, `.md`, `.txt`, or review-record files explicitly with `-Path`.
-7. Default post-change review command:
-   `powershell -NoProfile -ExecutionPolicy Bypass -File "<codex-hermes-bridge>\tools\hermes-review.ps1" -ProjectRoot "<project-root>" -TaskType paper -Path "<changed-file>"`
-8. Default post-change review is hybrid: the wrapper sends git diff plus changed-file paths. For PathOnly/path-based review, Hermes must return `READ_FAILED` instead of guessing if a needed file cannot be read.
-9. Use `qwen3.6-flash` for ordinary language, format, and narrow citation checks. Use `qwen3.7-plus` for paper logic, experimental claims, result interpretation, figure/table consistency, final checks, or multi-file changes. Use `-OpinionCount 3` for Qwen flash, Qwen pro, and DeepSeek flash; `-OpinionCount 4` adds GLM; `-OpinionCount 5` adds DeepSeek pro.
-10. Hermes findings should use the same first-principles format: objective or invariant, concrete evidence, why it matters, and a concrete action. For paper work, emphasize claim objective, evidence boundary, and source/quote/line when available. Treat unsupported findings as leads to verify, not facts.
-11. For figures, screenshots, or image files, pass the image with `-Path`; the wrapper uses `-Vision auto` and `qwen3.7-plus` by default for direct visual review.
-12. Use `-Models` for exact user-requested combinations, such as DeepSeek flash plus Qwen flash.
-13. Do not persist Markdown reports unless the user asks. Relay Hermes findings in the final response and let the wrapper delete its temporary report.
-14. Treat Hermes as independent input, not automatic truth. Codex must verify findings before changing files or accepting conclusions.
+- 格式、清单和引用数量等窄任务使用 `-Preset delegate`。
+- 论文逻辑、方法、结果、claim、引用和图表一致性使用 `-Preset paper`；投稿前高风险版本可用 `paper-deep`。
+- paper preset 必须显式列出完整正文、补充材料和相关文本文件。每个模型独立审查全部材料，不能按章节分工，也不能看到其他 reviewer 的身份或输出。
+- 标准面板顺序固定为 DeepSeek Pro、DeepSeek Flash、千问 Plus。
+- 图片默认不外发；用户明确允许后才使用 `-Vision shared -AllowImageUpload`。
+- Codex/Sol 在全部独立输出完成后做语义合并和证据核验。模型自报 confidence 不等于事实。
+- 默认不保存报告；用户要求存档时才用 `-OutputPath` 或 `-KeepReport`。
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File "<bridge>\tools\hermes-review.ps1" `
+  -Preset paper -ProjectRoot "<root>" -Path "<main>","<supplement>" `
+  -Prompt "完整审查逻辑、数字、证据边界和可推广性。"
+```

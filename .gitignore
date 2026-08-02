@@ -3,6 +3,7 @@
 !.env.example
 
 .codex-hermes-reviews/
+pr-compliance-report.json
 *.report.md
 *.tmp
 *.log

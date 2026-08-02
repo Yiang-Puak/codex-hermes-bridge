@@ -1,0 +1,60 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Codex Hermes Bridge v0.3 result",
+  "type": "object",
+  "required": ["schemaVersion", "runStatus", "preset", "snapshot", "reviewers"],
+  "properties": {
+    "schemaVersion": { "const": "2.1" },
+    "runStatus": { "enum": ["prepared", "preflight", "running", "collecting", "completed", "failed", "interrupted"] },
+    "preset": { "enum": ["delegate", "paper", "paper-deep", "code", "code-deep"] },
+    "snapshot": {
+      "type": "object",
+      "required": ["id", "coverage", "files"],
+      "properties": {
+        "id": { "type": "string" },
+        "coverage": { "enum": ["complete", "incomplete", "read-failed"] },
+        "files": { "type": "array" }
+      }
+    },
+    "transport": {
+      "type": "object",
+      "properties": {
+        "preflightExitCode": { "type": ["integer", "null"] },
+        "runnerExitCode": { "type": ["integer", "null"] },
+        "nonFatalDiagnostics": { "type": "array", "items": { "type": "string" } },
+        "failureDiagnostic": { "type": "string" }
+      }
+    },
+    "reviewers": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["model", "provider", "role", "status", "findings"],
+        "properties": {
+          "model": { "type": "string" },
+          "provider": { "type": "string" },
+          "role": { "type": "string" },
+          "status": { "enum": ["prepared", "completed", "failed", "timed-out", "invalid-output"] },
+          "findings": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "required": ["reviewer", "severity", "category", "summary", "principle", "evidence", "confidence", "action"],
+              "properties": {
+                "reviewer": { "type": "string" },
+                "severity": { "enum": ["CRITICAL", "HIGH", "MEDIUM", "LOW"] },
+                "category": { "type": "string" },
+                "summary": { "type": "string" },
+                "principle": { "type": "string" },
+                "evidence": { "type": "string" },
+                "confidence": { "type": "number", "minimum": 0, "maximum": 1 },
+                "action": { "type": "string" }
+              }
+            }
+          },
+          "residualRisks": { "type": "array" }
+        }
+      }
+    }
+  }
+}

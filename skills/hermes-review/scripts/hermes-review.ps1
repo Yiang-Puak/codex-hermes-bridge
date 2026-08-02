@@ -1,1105 +1,852 @@
 param(
-    [ValidateSet("review", "delegate")]
-    [string]$Flow = "review",
-
-    [ValidateSet("auto", "flash", "pro")]
-    [string]$Mode = "auto",
-
-    [ValidateSet("auto", "paper", "code")]
-    [string]$TaskType = "auto",
+    [ValidateSet("delegate", "paper", "paper-deep", "code", "code-deep")]
+    [string]$Preset = "code",
 
     [string[]]$Path = @(),
-
     [string]$ProjectRoot = (Get-Location).Path,
-
-    [string]$ExtraPrompt = "",
-
-    [string]$WslDistro = "Ubuntu-24.04",
-
-    [string]$HermesEnvPath = "/root/.hermes/.env",
-
-    [string]$Provider = "",
-
-    [string]$Model = "",
-
+    [string]$Prompt = "",
     [string[]]$Models = @(),
 
-    [string]$OutputPath = "",
+    # Compatibility with the v0.2 invocation shape.  Define these names
+    # explicitly so PowerShell never treats -Mode as the -Models abbreviation.
+    [ValidateSet("", "auto", "flash")]
+    [string]$Mode = "",
+    [string]$Flow = "",
+    [switch]$Lite,
+    [switch]$PathOnly,
+    [ValidateSet("", "code", "paper")]
+    [string]$TaskType = "",
+    [string]$ExtraPrompt = "",
 
-    [ValidateSet("auto", "on", "off")]
-    [string]$Vision = "auto",
-
-    [string]$VisionModel = "qwen3.7-plus",
-
-    [ValidateRange(1, 50)]
-    [int]$MaxImageMb = 10,
-
-    [ValidateRange(1, 5)]
-    [int]$OpinionCount = 1,
-
-    [ValidateRange(1, 50)]
+    [ValidateRange(1, 20)]
     [int]$MaxFindings = 8,
 
-    [switch]$Lite,
+    [ValidateRange(30, 1800)]
+    [int]$TimeoutSec = 240,
 
-    [switch]$PathOnly,
+    [ValidateRange(1, 5)]
+    [int]$Concurrency = 2,
 
+    [ValidateSet("off", "shared")]
+    [string]$Vision = "off",
+
+    [switch]$AllowImageUpload,
+    [switch]$AllowSensitiveInput,
     [switch]$KeepReport,
-
+    [string]$OutputPath = "",
     [switch]$KeepTemp,
-
-    [switch]$NoRun
+    [switch]$NoRun,
+    [string]$WslDistro = "Ubuntu-24.04"
 )
 
 Set-StrictMode -Version Latest
 $ErrorActionPreference = "Stop"
-
-$DefaultProvider = "alibaba"
-$DeepSeekProvider = "deepseek"
-$FlashModel = "qwen3.6-flash"
-$ProModel = "qwen3.7-plus"
-$DeepSeekFlashOpinionModel = "deepseek-v4-flash"
-$CodeProModel = "glm-5.2"
-$DeepSeekProOpinionModel = "deepseek-v4-pro"
-$ImageExtensions = @(".png", ".jpg", ".jpeg", ".webp")
-$InlineContentLimit = 60000
-
 [Console]::OutputEncoding = [System.Text.UTF8Encoding]::new($false)
 $OutputEncoding = [System.Text.UTF8Encoding]::new($false)
 
-function Resolve-ProjectRoot {
-    param([string]$Root)
-    return (Resolve-Path -LiteralPath $Root).Path
+$SkillRoot = Split-Path -Parent $PSScriptRoot
+$ConfigPath = Join-Path $SkillRoot "config\profiles.json"
+$VisionScriptPath = Join-Path $PSScriptRoot "vision.py"
+$ImageExtensions = @(".png", ".jpg", ".jpeg", ".webp")
+$MaxTextFileBytes = 2MB
+
+function Write-Utf8File {
+    param([string]$Target, [string]$Text)
+    [System.IO.File]::WriteAllText($Target, $Text, [System.Text.UTF8Encoding]::new($false))
 }
 
-function Resolve-ReviewOutputPath {
-    param(
-        [string]$Root,
-        [string]$RequestedPath,
-        [string]$FallbackPath,
-        [bool]$UseProjectDefault
-    )
-
-    if ($RequestedPath.Trim().Length -gt 0) {
-        if ([IO.Path]::IsPathRooted($RequestedPath)) {
-            $target = $RequestedPath
-        } else {
-            $target = Join-Path $Root $RequestedPath
-        }
-    } elseif ($UseProjectDefault) {
-        $stamp = Get-Date -Format "yyyyMMdd-HHmmss"
-        $target = Join-Path $Root ".codex-hermes-reviews\hermes-review-$stamp.md"
-    } else {
-        $target = $FallbackPath
+function Read-JsonFile {
+    param([string]$Target)
+    if (-not (Test-Path -LiteralPath $Target)) {
+        throw "Missing configuration: $Target"
     }
+    return (Get-Content -LiteralPath $Target -Raw -Encoding UTF8 | ConvertFrom-Json)
+}
 
-    $parent = Split-Path -Parent $target
-    if ($parent -and -not (Test-Path -LiteralPath $parent)) {
-        New-Item -ItemType Directory -Force -Path $parent | Out-Null
+function Get-ObjectProperty {
+    param([object]$Object, [string]$Name, [object]$Default = $null)
+    if ($null -ne $Object -and $null -ne $Object.PSObject.Properties[$Name]) {
+        return $Object.PSObject.Properties[$Name].Value
     }
-
-    return $target
+    return $Default
 }
 
 function ConvertTo-WslPath {
     param([string]$WindowsPath)
-
     $fullPath = (Resolve-Path -LiteralPath $WindowsPath).Path
     if ($fullPath -match "^([A-Za-z]):\\(.*)$") {
-        $drive = $Matches[1].ToLowerInvariant()
-        $rest = $Matches[2] -replace "\\", "/"
-        return "/mnt/$drive/$rest"
+        return "/mnt/$($Matches[1].ToLowerInvariant())/$($Matches[2] -replace '\\', '/')"
     }
-
     throw "Only Windows drive paths are supported: $fullPath"
-}
-
-function Resolve-WslConfigPath {
-    param([string]$PathValue)
-
-    $clean = $PathValue.Trim()
-    if ($clean.Length -eq 0) {
-        return "/root/.hermes/.env"
-    }
-
-    if ($clean -match "^([A-Za-z]):\\(.*)$") {
-        $drive = $Matches[1].ToLowerInvariant()
-        $rest = $Matches[2] -replace "\\", "/"
-        return "/mnt/$drive/$rest"
-    }
-
-    return $clean
 }
 
 function Quote-Bash {
     param([string]$Value)
-    $escaped = $Value.Replace("'", "'\''")
-    return "'" + $escaped + "'"
+    return "'" + $Value.Replace("'", "'\''") + "'"
 }
 
-function Test-GitRepo {
-    param([string]$Root)
+function Get-Sha256Bytes {
+    param([byte[]]$Bytes)
+    $sha = [System.Security.Cryptography.SHA256]::Create()
     try {
-        $result = & git -C $Root rev-parse --is-inside-work-tree 2>$null
-        return ($LASTEXITCODE -eq 0 -and $result -eq "true")
-    } catch {
-        return $false
+        return (-join ($sha.ComputeHash($Bytes) | ForEach-Object { $_.ToString("x2") }))
+    } finally {
+        $sha.Dispose()
     }
 }
 
-function Test-ImageFile {
-    param([string]$File)
-    $extension = [IO.Path]::GetExtension($File).ToLowerInvariant()
-    return ($ImageExtensions -contains $extension)
-}
-
-function Get-TokenEstimate {
+function Get-Sha256Text {
     param([string]$Text)
-
-    $totalChars = $Text.Length
-    if ($totalChars -eq 0) {
-        return [pscustomobject]@{
-            Chars = 0
-            CjkChars = 0
-            NonCjkChars = 0
-            EnglishBaseline = 0
-            MixedEstimate = 0
-        }
-    }
-
-    $cjkPattern = '[\u3400-\u9FFF\uF900-\uFAFF\u3040-\u30FF\uAC00-\uD7AF]'
-    $cjkChars = ([regex]::Matches($Text, $cjkPattern)).Count
-    $nonCjkChars = [Math]::Max(0, $totalChars - $cjkChars)
-    $englishBaseline = [math]::Ceiling($totalChars / 4.0)
-    $mixedEstimate = [math]::Ceiling($cjkChars + ($nonCjkChars / 4.0))
-
-    return [pscustomobject]@{
-        Chars = $totalChars
-        CjkChars = $cjkChars
-        NonCjkChars = $nonCjkChars
-        EnglishBaseline = $englishBaseline
-        MixedEstimate = [Math]::Max($englishBaseline, $mixedEstimate)
-    }
+    return Get-Sha256Bytes ([System.Text.Encoding]::UTF8.GetBytes($Text))
 }
 
-function Get-GitReviewContent {
+function Test-GitRepository {
     param([string]$Root)
+    $value = & git -C $Root rev-parse --is-inside-work-tree 2>$null
+    return ($LASTEXITCODE -eq 0 -and $value -eq "true")
+}
 
-    $staged = & git -C $Root diff --cached --no-ext-diff -- . 2>$null
-    $unstaged = & git -C $Root diff --no-ext-diff -- . 2>$null
-    $names = & git -C $Root diff --name-only --cached -- . 2>$null
-    $names += & git -C $Root diff --name-only -- . 2>$null
-    $uniqueNames = @($names | Where-Object { $_ } | Sort-Object -Unique)
-    $existingChangedFiles = @()
-    $missingChangedFiles = @()
-    $imageFiles = @()
-    foreach ($name in $uniqueNames) {
+function Resolve-ExplicitFiles {
+    param([string[]]$Items, [string]$Root)
+    $files = @()
+    foreach ($item in $Items) {
+        foreach ($part in ($item -split ",")) {
+            $clean = $part.Trim().Trim('"').Trim("'")
+            if (-not $clean) { continue }
+            $candidate = if ([System.IO.Path]::IsPathRooted($clean)) { $clean } else { Join-Path $Root $clean }
+            if (-not (Test-Path -LiteralPath $candidate -PathType Leaf)) {
+                throw "Input file is missing or is not a file: $clean"
+            }
+            $files += (Resolve-Path -LiteralPath $candidate).Path
+        }
+    }
+    return @($files | Sort-Object -Unique)
+}
+
+function Get-GitSelection {
+    param([string]$Root)
+    $names = @()
+    $names += & git -c core.quotepath=false -C $Root diff --name-only --cached -- . 2>$null
+    $names += & git -c core.quotepath=false -C $Root diff --name-only -- . 2>$null
+    $names += & git -c core.quotepath=false -C $Root ls-files --others --exclude-standard -- . 2>$null
+    $names = @($names | Where-Object { $_ } | Sort-Object -Unique)
+
+    $files = @()
+    $missing = @()
+    foreach ($name in $names) {
         $candidate = Join-Path $Root $name
-        if (Test-Path -LiteralPath $candidate) {
-            $item = Get-Item -LiteralPath $candidate
-            if (-not $item.PSIsContainer) {
-                $existingChangedFiles += $item.FullName
-                if (Test-ImageFile $item.FullName) {
-                    $imageFiles += $item.FullName
-                }
-            }
+        if (Test-Path -LiteralPath $candidate -PathType Leaf) {
+            $files += (Resolve-Path -LiteralPath $candidate).Path
         } else {
-            $missingChangedFiles += $name
+            $missing += $name
         }
     }
 
-    $parts = @()
-    if ($staged) {
-        $parts += "## STAGED DIFF"
-        $parts += ""
-        $parts += $staged
-    }
-    if ($unstaged) {
-        $parts += "## UNSTAGED DIFF"
-        $parts += ""
-        $parts += $unstaged
-    }
-    if ($existingChangedFiles.Count -gt 0) {
-        $parts += ""
-        $parts += "## CHANGED FILES AVAILABLE FOR FULL-CONTEXT INSPECTION"
-        $parts += ""
-        $parts += "Use these paths when the diff lacks enough surrounding context. Read the full file before making claims that depend on content outside the diff."
-        $parts += "If a needed file cannot be read, return READ_FAILED with the path and do not infer content from the filename."
-        $parts += ""
-        foreach ($file in ($existingChangedFiles | Sort-Object -Unique)) {
-            $parts += "- WSL: $(ConvertTo-WslPath $file)"
-            $parts += "  Windows: $file"
-        }
-    }
-    if ($missingChangedFiles.Count -gt 0) {
-        $parts += ""
-        $parts += "## CHANGED FILES NOT AVAILABLE ON DISK"
-        $parts += ""
-        $parts += "These paths appeared in git diff but were not readable from the working tree, often because they were deleted or renamed."
-        $parts += "Do not attempt to read files listed here; rely on the git diff for their removed or renamed content."
-        foreach ($name in ($missingChangedFiles | Sort-Object -Unique)) {
-            $parts += "- $name"
-        }
-    }
+    $staged = (& git -c core.quotepath=false -C $Root diff --cached --no-ext-diff -- . 2>$null) -join "`n"
+    $unstaged = (& git -c core.quotepath=false -C $Root diff --no-ext-diff -- . 2>$null) -join "`n"
+    $diffParts = @()
+    if ($staged) { $diffParts += "## STAGED DIFF`n`n$staged" }
+    if ($unstaged) { $diffParts += "## UNSTAGED DIFF`n`n$unstaged" }
 
     return [pscustomobject]@{
-        Source = "git diff hybrid"
-        Text = ($parts -join "`n")
-        FileCount = $uniqueNames.Count
-        Files = $uniqueNames
-        ImageFiles = @($imageFiles | Sort-Object -Unique)
+        Files = @($files | Sort-Object -Unique)
+        Missing = @($missing)
+        Diff = ($diffParts -join "`n`n")
+        Names = @($names)
     }
 }
 
-function Resolve-InputPaths {
+function Test-BinaryBytes {
+    param([byte[]]$Bytes)
+    $limit = [Math]::Min($Bytes.Length, 8192)
+    for ($index = 0; $index -lt $limit; $index++) {
+        if ($Bytes[$index] -eq 0) { return $true }
+    }
+    return $false
+}
+
+function Test-SensitiveText {
+    param([string]$Text)
+    $patterns = @(
+        '-----BEGIN [A-Z ]*PRIVATE KEY-----',
+        '(?i)authorization\s*:\s*bearer\s+[A-Za-z0-9._~-]{12,}',
+        '(?i)(api[_-]?key|access[_-]?token|client[_-]?secret|password)\s*[:=]\s*["'']?[A-Za-z0-9_./+~-]{16,}',
+        '(?i)(postgres|mysql|mongodb(?:\+srv)?)://[^\s:@]+:[^\s@]+@'
+    )
+    foreach ($pattern in $patterns) {
+        if ([regex]::IsMatch($Text, $pattern)) { return $true }
+    }
+    return $false
+}
+
+function New-MaterialBundle {
     param(
-        [string[]]$Items,
-        [switch]$AllowDirectories
+        [string[]]$Files,
+        [string[]]$Missing,
+        [string]$GitDiff,
+        [string]$TempBase,
+        [string]$VisionMode,
+        [switch]$ImageUploadAllowed
     )
 
-    $resolved = @()
-    $expandedItems = @()
-    foreach ($item in $Items) {
-        foreach ($part in ($item -split ",")) {
-            $clean = $part.Trim().Trim('"').Trim("'")
-            if ($clean.Length -gt 0) {
-                $expandedItems += $clean
-            }
-        }
+    $parts = @("# IMMUTABLE REVIEW BUNDLE", "")
+    $manifest = @()
+    $imageSnapshots = @()
+    $temporaryPaths = @()
+    $incomplete = $false
+    $readFailed = $false
+    $readableMaterial = $false
+
+    if ($GitDiff) {
+        $parts += $GitDiff
+        $parts += ""
+        $readableMaterial = $true
     }
 
-    foreach ($item in $expandedItems) {
-        if (Test-Path -LiteralPath $item) {
-            $pathItem = Get-Item -LiteralPath $item
-            if ($pathItem.PSIsContainer -and -not $AllowDirectories) {
-                Write-Warning "Skipping directory path in content-review mode: $($pathItem.FullName)"
+    foreach ($missingPath in $Missing) {
+        $manifest += [pscustomobject]@{ path = $missingPath; status = "deleted-diff"; bytes = 0; sha256 = "" }
+    }
+
+    $imageIndex = 0
+    foreach ($file in $Files) {
+        $item = Get-Item -LiteralPath $file
+        $extension = $item.Extension.ToLowerInvariant()
+        if ($ImageExtensions -contains $extension) {
+            $bytes = [System.IO.File]::ReadAllBytes($item.FullName)
+            $hash = Get-Sha256Bytes $bytes
+            if ($VisionMode -eq "shared" -and $ImageUploadAllowed) {
+                $snapshotPath = "$TempBase.image-$imageIndex$extension"
+                [System.IO.File]::WriteAllBytes($snapshotPath, $bytes)
+                $temporaryPaths += $snapshotPath
+                $imageSnapshots += $snapshotPath
+                $parts += "## IMAGE SNAPSHOT"
+                $parts += "- Original: $($item.FullName)"
+                $parts += "- Snapshot SHA-256: $hash"
+                $parts += ""
+                $manifest += [pscustomobject]@{ path = $item.FullName; status = "image-snapshot"; bytes = $bytes.Length; sha256 = $hash }
+                $readableMaterial = $true
+            } else {
+                $manifest += [pscustomobject]@{ path = $item.FullName; status = "image-blocked"; bytes = $bytes.Length; sha256 = $hash }
+                $incomplete = $true
+            }
+            $imageIndex++
+            continue
+        }
+
+        if ($item.Length -gt $MaxTextFileBytes) {
+            $manifest += [pscustomobject]@{ path = $item.FullName; status = "oversized-skipped"; bytes = $item.Length; sha256 = "" }
+            $incomplete = $true
+            continue
+        }
+
+        try {
+            $bytes = [System.IO.File]::ReadAllBytes($item.FullName)
+            if (Test-BinaryBytes $bytes) {
+                $manifest += [pscustomobject]@{ path = $item.FullName; status = "binary-skipped"; bytes = $bytes.Length; sha256 = (Get-Sha256Bytes $bytes) }
+                $incomplete = $true
                 continue
             }
-            $resolved += $pathItem.FullName
-            continue
-        }
-
-        $matches = @(Resolve-Path -Path $item -ErrorAction SilentlyContinue)
-        foreach ($match in $matches) {
-            $pathItem = Get-Item -LiteralPath $match.Path
-            if ($pathItem.PSIsContainer -and -not $AllowDirectories) {
-                Write-Warning "Skipping directory path in content-review mode: $($pathItem.FullName)"
-                continue
-            }
-            $resolved += $pathItem.FullName
+            $decoder = [System.Text.UTF8Encoding]::new($false, $true)
+            $text = $decoder.GetString($bytes)
+            $hash = Get-Sha256Bytes $bytes
+            $parts += "## FILE: $($item.FullName)"
+            $parts += ""
+            $parts += '```'
+            $parts += $text
+            $parts += '```'
+            $parts += ""
+            $manifest += [pscustomobject]@{ path = $item.FullName; status = "included"; bytes = $bytes.Length; sha256 = $hash }
+            $readableMaterial = $true
+        } catch {
+            $manifest += [pscustomobject]@{ path = $item.FullName; status = "read-failed"; bytes = $item.Length; sha256 = "" }
+            $incomplete = $true
+            $readFailed = $true
         }
     }
 
-    return @($resolved | Sort-Object -Unique)
-}
-
-function Get-FileReviewContent {
-    param([string[]]$Files)
-
-    $binaryExtensions = @(
-        ".pdf", ".doc", ".docx", ".xls", ".xlsx", ".ppt", ".pptx",
-        ".gif", ".zip", ".7z", ".rar",
-        ".vhdx", ".exe", ".dll"
-    )
-
-    $parts = @()
-    $skipped = @()
-    $imageFiles = @()
-
-    foreach ($file in $Files) {
-        $extension = [IO.Path]::GetExtension($file).ToLowerInvariant()
-        if (Test-ImageFile $file) {
-            $imageFiles += $file
-            continue
-        }
-
-        if ($binaryExtensions -contains $extension) {
-            $skipped += $file
-            continue
-        }
-
-        $text = Get-Content -LiteralPath $file -Raw -Encoding UTF8
-        $parts += "## FILE: $file"
-        $parts += ""
-        $parts += '```'
-        $parts += $text
-        $parts += '```'
-        $parts += ""
-    }
-
-    if ($imageFiles.Count -gt 0) {
-        $parts += "## IMAGE FILES AVAILABLE FOR VISION REVIEW"
-        foreach ($file in $imageFiles) {
-            $parts += "- WSL: $(ConvertTo-WslPath $file)"
-            $parts += "  Windows: $file"
-        }
-        $parts += ""
-        $parts += "These images are not inlined as text. When vision is enabled, the wrapper sends them to the configured vision model."
-        $parts += ""
-    }
-
-    if ($skipped.Count -gt 0) {
-        $parts += "## SKIPPED BINARY OR RICH-DOCUMENT FILES"
-        foreach ($file in $skipped) {
-            $parts += "- $file"
-        }
-        $parts += ""
-        $parts += "These files were listed but not inlined. Ask Codex to render or extract them before relying on this review."
-    }
-
+    $text = $parts -join "`n"
+    $coverage = if ($readFailed -and -not $readableMaterial) { "read-failed" } elseif ($incomplete) { "incomplete" } elseif (-not $readableMaterial) { "read-failed" } else { "complete" }
     return [pscustomobject]@{
-        Source = "explicit file content"
-        Text = ($parts -join "`n")
-        FileCount = $Files.Count
-        Files = $Files
-        ImageFiles = @($imageFiles | Sort-Object -Unique)
+        Text = $text
+        Id = "sha256:$(Get-Sha256Text $text)"
+        Coverage = $coverage
+        Manifest = @($manifest)
+        ImageSnapshots = @($imageSnapshots)
+        TemporaryPaths = @($temporaryPaths)
     }
 }
 
-function Get-PathOnlyReviewContent {
-    param([string[]]$Files)
+function Resolve-Assignments {
+    param([object]$Configuration, [string]$PresetName, [string[]]$RequestedModels)
+    $presetDefinition = $Configuration.presets.PSObject.Properties[$PresetName].Value
+    if ($null -eq $presetDefinition) { throw "Unknown preset: $PresetName" }
 
-    $parts = @()
-    $imageFiles = @($Files | Where-Object { (Test-Path -LiteralPath $_) -and (Test-ImageFile $_) } | Sort-Object -Unique)
-    $parts += "## FILE PATHS FOR HERMES INSPECTION"
-    $parts += ""
-    $parts += "Read only the parts of these files needed for the requested task."
-    $parts += "Use the WSL paths when invoking tools from Hermes."
-    $parts += "You must actually read any file needed for your conclusion. If a file cannot be read, return READ_FAILED with the path and do not infer content from the filename."
-    $parts += ""
-
-    foreach ($file in $Files) {
-        $parts += "- WSL: $(ConvertTo-WslPath $file)"
-        $parts += "  Windows: $file"
-    }
-
-    if ($imageFiles.Count -gt 0) {
-        $parts += ""
-        $parts += "## IMAGE FILES AVAILABLE FOR VISION REVIEW"
-        foreach ($file in $imageFiles) {
-            $parts += "- WSL: $(ConvertTo-WslPath $file)"
-            $parts += "  Windows: $file"
-        }
-        $parts += ""
-        $parts += "When vision is enabled, these images are sent to the configured vision model before later text-model passes."
-    }
-
-    return [pscustomobject]@{
-        Source = "file paths only"
-        Text = ($parts -join "`n")
-        FileCount = $Files.Count
-        Files = $Files
-        ImageFiles = @($imageFiles)
-    }
-}
-
-function Select-HermesModel {
-    param(
-        [string]$ModeValue,
-        [string]$TaskTypeValue,
-        [string]$Text,
-        [int]$FileCount,
-        [string[]]$Files
-    )
-
-    if ($Model.Trim().Length -gt 0) {
-        return [pscustomobject]@{ Model = (Resolve-ModelAlias $Model); Reason = "explicit model override" }
-    }
-
-    if ($ModeValue -eq "flash") {
-        return [pscustomobject]@{ Model = $FlashModel; Reason = "manual flash mode" }
-    }
-    if ($ModeValue -eq "pro") {
-        return [pscustomobject]@{ Model = $ProModel; Reason = "manual pro mode" }
-    }
-
-    $charCount = $Text.Length
-    $joinedFiles = ($Files -join "`n").ToLowerInvariant()
-    $paperSignal = (($TaskTypeValue -eq "paper") -or ($joinedFiles -match "\.tex|manuscript|supplementary|response_to_reviewers|paper|论文|稿件"))
-    $codeSignal = (($TaskTypeValue -eq "code") -or ($joinedFiles -match "\.py|\.js|\.ts|\.tsx|\.jsx|\.java|\.go|\.rs|package\.json|requirements|dockerfile"))
-    $riskSignal = ($Text -match "Results|Discussion|Methods|baseline|metric|experiment|schema|migration|auth|database|security|payment|concurrency")
-
-    if ($paperSignal -and ($charCount -gt 8000 -or $riskSignal -or $FileCount -gt 1)) {
-        return [pscustomobject]@{ Model = $ProModel; Reason = "paper review with enough size or claim risk" }
-    }
-
-    if ($codeSignal -and ($charCount -gt 12000 -or $FileCount -ge 4 -or $riskSignal)) {
-        return [pscustomobject]@{ Model = $CodeProModel; Reason = "code review with size, multiple files, or risk signals" }
-    }
-
-    if ($charCount -gt 18000 -or $FileCount -ge 5) {
-        return [pscustomobject]@{ Model = $ProModel; Reason = "large review payload" }
-    }
-
-    return [pscustomobject]@{ Model = $FlashModel; Reason = "small or routine review payload" }
-}
-
-function Resolve-ModelAlias {
-    param([string]$Name)
-
-    $normalized = $Name.Trim().ToLowerInvariant() -replace "\s+", "-"
-    switch ($normalized) {
-        "qwen-flash" { return $FlashModel }
-        "qwen3-flash" { return $FlashModel }
-        "qwen3.6-flash" { return $FlashModel }
-        "qwen-pro" { return $ProModel }
-        "qwen-plus" { return $ProModel }
-        "qwen3-pro" { return $ProModel }
-        "qwen3.7-plus" { return $ProModel }
-        "deepseek-flash" { return $DeepSeekFlashOpinionModel }
-        "deepseek-v4-flash" { return $DeepSeekFlashOpinionModel }
-        "deepseek-pro" { return $DeepSeekProOpinionModel }
-        "deepseek-v4-pro" { return $DeepSeekProOpinionModel }
-        "glm" { return $CodeProModel }
-        "glm-pro" { return $CodeProModel }
-        "glm-code" { return $CodeProModel }
-        "glm-5.2" { return $CodeProModel }
-        default { return $Name.Trim() }
-    }
-}
-
-function Resolve-ModelList {
-    param([string[]]$Items)
-
-    $resolved = @()
-    foreach ($item in $Items) {
-        foreach ($part in ($item -split ",")) {
-            $clean = $part.Trim().Trim('"').Trim("'")
-            if ($clean.Length -gt 0) {
-                $modelName = Resolve-ModelAlias $clean
-                if (-not ($resolved -contains $modelName)) {
-                    $resolved += $modelName
+    $requested = @()
+    if (@($RequestedModels).Count -gt 0) {
+        foreach ($item in $RequestedModels) {
+            foreach ($part in ($item -split ",")) {
+                $name = $part.Trim()
+                if ($name) {
+                    $requested += [pscustomobject]@{ model = $name; role = if ($PresetName -eq "delegate") { "delegate" } else { "holistic" } }
                 }
             }
         }
+    } else {
+        $requested = @($presetDefinition.reviewers)
     }
 
-    return @($resolved)
+    $assignments = @()
+    foreach ($reviewer in $requested) {
+        $name = [string]$reviewer.model
+        $definition = Get-ObjectProperty -Object $Configuration.models -Name $name
+        if ($null -eq $definition) { throw "Model '$name' is not defined in profiles.json." }
+        $provider = [string](Get-ObjectProperty -Object $definition -Name "provider" "")
+        $class = [string](Get-ObjectProperty -Object $definition -Name "class" "")
+        if (-not $provider -or -not $class) { throw "Model '$name' has an incomplete profile definition." }
+        $assignments += [pscustomobject]@{
+            Model = $name
+            Provider = $provider
+            Class = $class
+            Role = [string]$reviewer.role
+        }
+    }
+    return [pscustomobject]@{ Kind = [string]$presetDefinition.kind; Assignments = @($assignments) }
 }
 
-function Select-OpinionModels {
+function New-ReviewerPrompt {
     param(
-        [string]$PrimaryModel,
-        [int]$Count
+        [string]$Kind,
+        [object]$Assignment,
+        [string]$BundlePath,
+        [string]$SnapshotId,
+        [string]$Coverage,
+        [int]$FindingLimit,
+        [string]$ExtraPrompt,
+        [int]$PanelSize
     )
 
-    if ($Count -le 1) {
-        return @($PrimaryModel)
-    }
+    $contract = switch ($Kind) {
+        "paper" {
+@"
+You are an independent holistic manuscript reviewer. Review the entire supplied package yourself. Do not assume another reviewer covers any section, citation, table, figure, supplement, or limitation. Other reviewer identities and outputs are unavailable.
 
-    $opinionModels = @($FlashModel, $ProModel, $DeepSeekFlashOpinionModel, $CodeProModel, $DeepSeekProOpinionModel)
-
-    if ($Count -ge 3) {
-        return @($opinionModels | Select-Object -First $Count)
-    }
-
-    $candidates = @()
-    if ($PrimaryModel -eq $CodeProModel -or $PrimaryModel -eq $DeepSeekProOpinionModel) {
-        $candidates += $PrimaryModel
-        $candidates += $ProModel
-    } else {
-        $candidates += $PrimaryModel
-        $candidates += $CodeProModel
-    }
-
-    $unique = @()
-    foreach ($candidate in $candidates) {
-        if ($candidate -and -not ($unique -contains $candidate)) {
-            $unique += $candidate
+Cover the research question, logic, methods, results, numerical consistency, claim strength, evidence boundaries, citations, reproducibility, terminology, writing, and likely reviewer objections.
+"@
+        }
+        "code" {
+@"
+You are an independent code reviewer with role '$($Assignment.Role)'. Inspect the complete bundle. A specialist role means deeper attention, not permission to ignore substantiated CRITICAL or HIGH issues elsewhere. Check correctness, regressions, edge cases, API contracts, dependencies, security, tests, and user-visible behavior.
+Prefer the smallest change that satisfies the stated goal. Flag one-off abstractions, duplicate implementations, speculative configuration, and unrelated refactors when they add complexity without evidence.
+"@
+        }
+        default {
+@"
+Complete the bounded delegate check directly. Inspect only what the request requires, but do not infer unreadable content.
+"@
         }
     }
 
-    return @($unique | Select-Object -First $Count)
-}
+    return @"
+$contract
 
-function Select-HermesProvider {
-    param(
-        [string]$ModelName,
-        [string]$RequestedProvider
-    )
+Review metadata:
+- Reviewer model: $($Assignment.Model)
+- Provider: $($Assignment.Provider)
+- Panel size: $PanelSize
+- Material snapshot: $SnapshotId
+- Coverage: $Coverage
+- Immutable bundle: $BundlePath
 
-    if ($RequestedProvider.Trim().Length -gt 0) {
-        return $RequestedProvider.Trim()
-    }
+Read the immutable bundle before reaching conclusions. If coverage is incomplete, say what could not be reviewed. Return no more than $FindingLimit material findings.
 
-    if ($ModelName -match "^(deepseek|vanchin/deepseek|siliconflow/deepseek)") {
-        return $DeepSeekProvider
-    }
-
-    return $DefaultProvider
-}
-
-function Get-ModelRouteSummary {
-    param(
-        [string[]]$ModelNames,
-        [string]$RequestedProvider
-    )
-
-    $routes = foreach ($modelName in $ModelNames) {
-        $providerName = Select-HermesProvider -ModelName $modelName -RequestedProvider $RequestedProvider
-        "$modelName($providerName)"
-    }
-
-    return ($routes -join ", ")
-}
-
-function Write-VisionRunnerScript {
-    param([string]$Path)
-
-    $script = @'
-import argparse
-import base64
-import json
-import os
-import sys
-import urllib.error
-import urllib.request
-
-
-KNOWN_IMAGE_TYPES = {
-    ".png": "image/png",
-    ".jpg": "image/jpeg",
-    ".jpeg": "image/jpeg",
-    ".webp": "image/webp",
-}
-
-
-def load_env(path):
-    values = {}
-    if not os.path.exists(path):
-        return values
-    with open(path, "r", encoding="utf-8") as handle:
-        for raw in handle:
-            line = raw.strip()
-            if not line or line.startswith("#") or "=" not in line:
-                continue
-            key, value = line.split("=", 1)
-            values[key.strip()] = value.strip().strip('"').strip("'")
-    return values
-
-
-def read_text(path):
-    with open(path, "r", encoding="utf-8-sig") as handle:
-        return handle.read()
-
-
-def validate_image_bytes(path, data):
-    ext = os.path.splitext(path)[1].lower()
-    if ext not in KNOWN_IMAGE_TYPES:
-        raise ValueError(f"unsupported image extension: {ext}")
-    if ext == ".png" and not data.startswith(b"\x89PNG\r\n\x1a\n"):
-        raise ValueError("file does not look like a PNG image")
-    if ext in (".jpg", ".jpeg") and not data.startswith(b"\xff\xd8\xff"):
-        raise ValueError("file does not look like a JPEG image")
-    if ext == ".webp" and not (data.startswith(b"RIFF") and data[8:12] == b"WEBP"):
-        raise ValueError("file does not look like a WEBP image")
-    return KNOWN_IMAGE_TYPES[ext]
-
-
-def image_part(path):
-    with open(path, "rb") as handle:
-        data = handle.read()
-    mime = validate_image_bytes(path, data)
-    encoded = base64.b64encode(data).decode("ascii")
-    return {
-        "type": "image_url",
-        "image_url": {"url": f"data:{mime};base64,{encoded}"},
-    }
-
-
-def extract_text(data):
-    choice = data.get("choices", [{}])[0]
-    message = choice.get("message", {})
-    content = message.get("content", "")
-    if isinstance(content, str):
-        return content
-    if isinstance(content, list):
-        chunks = []
-        for item in content:
-            if isinstance(item, dict):
-                if "text" in item:
-                    chunks.append(str(item["text"]))
-                elif item.get("type") == "text" and "content" in item:
-                    chunks.append(str(item["content"]))
-            else:
-                chunks.append(str(item))
-        return "\n".join(chunks)
-    return str(content)
-
-
-def main():
-    parser = argparse.ArgumentParser()
-    parser.add_argument("--manifest", required=True)
-    parser.add_argument("--prompt", required=True)
-    parser.add_argument("--model", required=True)
-    parser.add_argument("--max-image-bytes", type=int, required=True)
-    parser.add_argument("--env-file", default=os.environ.get("HERMES_ENV_PATH", "/root/.hermes/.env"))
-    args = parser.parse_args()
-
-    env = load_env(args.env_file)
-    key = os.environ.get("DASHSCOPE_API_KEY") or env.get("DASHSCOPE_API_KEY")
-    if not key:
-        print(f"DASHSCOPE_API_KEY is not set in {args.env_file} or the process environment.", file=sys.stderr)
-        return 2
-
-    base_url = os.environ.get("DASHSCOPE_BASE_URL") or env.get("DASHSCOPE_BASE_URL") or "https://dashscope.aliyuncs.com/compatible-mode/v1"
-    endpoint = base_url.rstrip("/") + "/chat/completions"
-
-    with open(args.manifest, "r", encoding="utf-8-sig") as handle:
-        manifest = json.load(handle)
-
-    prompt_text = read_text(args.prompt)
-    images = manifest.get("images", [])
-    vision_preamble = (
-        f"You are the vision sidecar running model {args.model}. "
-        "The review prompt below may mention separate Hermes text-pass models; do not report those as the vision model. "
-        "Inspect the attached image files directly and mention concrete visual evidence. "
-        "Do not claim an image was inspected if it was skipped."
-    )
-    content = [{"type": "text", "text": vision_preamble + "\n\n" + prompt_text}]
-
-    attached = 0
-    skipped = []
-    for image in images:
-        path = image["wsl"]
-        size = int(image.get("bytes", 0))
-        if size > args.max_image_bytes:
-            skipped.append(f"{path} ({size} bytes > limit {args.max_image_bytes})")
-            continue
-        try:
-            part = image_part(path)
-        except Exception as exc:
-            skipped.append(f"{path} ({exc})")
-            continue
-        content.append({"type": "text", "text": f"Image file: {path}"})
-        content.append(part)
-        attached += 1
-
-    if skipped:
-        content.append({"type": "text", "text": "Skipped oversized images:\n" + "\n".join(skipped)})
-
-    if attached == 0:
-        print("No image files were attached to the vision request.", file=sys.stderr)
-        return 1
-
-    body = {
-        "model": args.model,
-        "messages": [{"role": "user", "content": content}],
-        "temperature": 0.2,
-    }
-
-    request = urllib.request.Request(
-        endpoint,
-        data=json.dumps(body, ensure_ascii=False).encode("utf-8"),
-        headers={
-            "Authorization": f"Bearer {key}",
-            "Content-Type": "application/json",
-        },
-        method="POST",
-    )
-
-    try:
-        with urllib.request.urlopen(request, timeout=180) as response:
-            data = json.loads(response.read().decode("utf-8"))
-    except urllib.error.HTTPError as exc:
-        detail = exc.read().decode("utf-8", errors="replace")
-        print(f"Vision API HTTP {exc.code}: {detail}", file=sys.stderr)
-        return 1
-    except Exception as exc:
-        print(f"Vision API request failed: {exc}", file=sys.stderr)
-        return 1
-
-    print(extract_text(data))
-    return 0
-
-
-if __name__ == "__main__":
-    raise SystemExit(main())
-'@
-
-    [System.IO.File]::WriteAllText($Path, $script, [System.Text.UTF8Encoding]::new($false))
-}
-
-$resolvedRoot = Resolve-ProjectRoot $ProjectRoot
-$gitReview = $null
-$usePathOnly = ($PathOnly -or $Flow -eq "delegate")
-$explicitModels = @(Resolve-ModelList $Models)
-
-if ($explicitModels.Count -gt 0 -and $Model.Trim().Length -gt 0) {
-    throw "Use either -Model for one explicit model or -Models for an explicit model list, not both."
-}
-
-if ($usePathOnly) {
-    $resolvedFiles = @(Resolve-InputPaths -Items $Path)
-    if ($resolvedFiles.Count -eq 0) {
-        Write-Error "Path-only or delegate flow requires readable -Path files."
-    }
-    $review = Get-PathOnlyReviewContent $resolvedFiles
-} else {
-    if (Test-GitRepo $resolvedRoot) {
-        $gitReview = Get-GitReviewContent $resolvedRoot
-    }
-
-    if ($gitReview -and $gitReview.Text.Trim().Length -gt 0) {
-        $review = $gitReview
-    } else {
-        $resolvedFiles = @(Resolve-InputPaths -Items $Path)
-        if ($resolvedFiles.Count -eq 0) {
-            Write-Error "No git diff was found and no readable -Path files were provided. Pass changed files with -Path, or run this inside a git repo with changes."
-        }
-        $review = Get-FileReviewContent $resolvedFiles
-    }
-}
-
-if ($explicitModels.Count -gt 0) {
-    $selection = [pscustomobject]@{ Model = $explicitModels[0]; Reason = "explicit model list override" }
-} elseif ($Flow -eq "delegate" -and $Mode -eq "auto" -and $Model.Trim().Length -eq 0) {
-    $selection = [pscustomobject]@{ Model = $FlashModel; Reason = "delegate flow default flash mode" }
-} else {
-    $selection = Select-HermesModel -ModeValue $Mode -TaskTypeValue $TaskType -Text $review.Text -FileCount $review.FileCount -Files $review.Files
-}
-$model = $selection.Model
-$models = if ($explicitModels.Count -gt 0) { $explicitModels } else { @(Select-OpinionModels -PrimaryModel $model -Count $OpinionCount) }
-$modelSummary = ($models -join ", ")
-$selectionReason = $selection.Reason
-if ($explicitModels.Count -gt 0) {
-    $selectionReason = "explicit model list override"
-} elseif ($OpinionCount -ge 3) {
-    if ($OpinionCount -eq 3) {
-        $selectionReason = "three independent opinions requested; using Qwen flash, Qwen pro, and DeepSeek flash"
-    } elseif ($OpinionCount -eq 4) {
-        $selectionReason = "four independent opinions requested; adding GLM to Qwen and DeepSeek flash opinions"
-    } else {
-        $selectionReason = "five independent opinions requested; adding DeepSeek pro to Qwen, DeepSeek flash, and GLM opinions"
-    }
-} elseif ($OpinionCount -gt 1) {
-    $selectionReason = "two independent opinions requested"
-}
-$selectedProvider = if ($Provider.Trim().Length -gt 0) { $Provider.Trim() } else { "auto" }
-$routeSummary = Get-ModelRouteSummary -ModelNames $models -RequestedProvider $Provider
-$imageFiles = @($review.ImageFiles)
-$resolvedVisionModel = Resolve-ModelAlias $VisionModel
-$resolvedHermesEnvPath = Resolve-WslConfigPath $HermesEnvPath
-$visionEnabled = ($Vision -ne "off" -and $imageFiles.Count -gt 0)
-$visionStatus = if ($visionEnabled) {
-    "enabled: $resolvedVisionModel via alibaba vision API"
-} elseif ($imageFiles.Count -gt 0) {
-    "off: image files were detected but will not be sent to a vision model"
-} elseif ($Vision -eq "on") {
-    "requested but no image files were detected"
-} else {
-    "not needed: no image files detected"
-}
-if ($Vision -eq "on" -and $imageFiles.Count -eq 0) {
-    Write-Warning "Vision was set to 'on', but no image files were detected in -Path or git diff."
-}
-$materialMode = if ($usePathOnly) {
-    "path-only file references"
-} elseif ($review.Source -eq "git diff hybrid") {
-    "hybrid git diff plus changed file paths"
-} else {
-    "inline explicit file content"
-}
-$promptDelivery = if ($review.Text.Length -le $InlineContentLimit) {
-    "inline review material"
-} else {
-    "temporary input file pointer"
-}
-
-$tempBase = Join-Path ([IO.Path]::GetTempPath()) ("hermes-review-" + [guid]::NewGuid().ToString("N"))
-$inputFile = "$tempBase.input.md"
-$promptFile = "$tempBase.prompt.md"
-$runnerFile = "$tempBase.runner.sh"
-$visionScriptFile = "$tempBase.vision.py"
-$visionManifestFile = "$tempBase.images.json"
-$visionResultFile = "$tempBase.vision-result.md"
-$defaultReportFile = "$tempBase.report.md"
-$reportShouldPersist = ($KeepReport -or $OutputPath.Trim().Length -gt 0)
-$resolvedOutputPath = Resolve-ReviewOutputPath -Root $resolvedRoot -RequestedPath $OutputPath -FallbackPath $defaultReportFile -UseProjectDefault $KeepReport
-
-if ($Flow -eq "delegate") {
-    $roleLine = "You are a lightweight Hermes-first delegate. Complete the requested check directly, using the provided file paths when relevant."
-    $flowInstructions = @"
-1. Do the requested task directly and inspect only the necessary parts of the provided files.
-2. Reason from first principles: state the task objective, the relevant constraint or invariant, the available evidence, the failure mode, and the smallest useful action.
-3. Prefer concise, concrete findings over broad review commentary.
-4. Do not rewrite files unless explicitly requested.
-5. If your conclusion depends on a provided path, read that file first. If a file cannot be read, return READ_FAILED with the path and do not infer content from the filename.
-6. Return at most $MaxFindings findings. If there are more, list the most important ones and say how many remain.
-7. For each material finding, use this evidence format:
-   Finding N: [Severity: CRITICAL|HIGH|MEDIUM|LOW] [Category: Bug|Logic|Evidence|Style|Missing Test|Security|Performance|Other] one-line summary
-   Principle: the objective, invariant, or constraint being violated.
-   Evidence: file/path/line, exact quote, command output, or concrete visual observation. If evidence is unavailable, write "Evidence: not available" and lower confidence.
-   Why it matters: one or two sentences.
-   Action: one concrete next step.
-8. Then include:
-   - Model used
-   - Findings
-   - Residual risks
-   - Suggested next action
-"@
-} else {
-    $roleLine = "You are an independent reviewer for Codex output."
-    $flowInstructions = @"
-1. Focus on concrete problems only: bugs, regressions, unsupported scientific claims, evidence mismatch, missing tests, broken formatting, reproducibility risk, and maintainability issues.
-2. Reason from first principles: state the task objective, the relevant constraint or invariant, the available evidence, the failure mode, and the smallest useful action.
-3. For paper work, check logic, claim strength, terminology consistency, figure/table/text consistency, citation/evidence boundaries, and whether any new statement needs user confirmation.
-4. For code work, check correctness, edge cases, tests, API contracts, dependencies, security-sensitive behavior, and user-facing regressions.
-5. Do not rewrite the whole work. Return findings ordered by severity.
-6. If the diff lacks enough context, use the provided changed-file paths to inspect full files. If a needed file cannot be read, return READ_FAILED with the path and do not infer content from the filename.
-7. If there are no material issues, say so clearly and mention residual risk or missing validation.
-8. Return at most $MaxFindings findings. If there are more, list the most important ones and say how many remain.
-9. For each material finding, use this evidence format:
-   Finding N: [Severity: CRITICAL|HIGH|MEDIUM|LOW] [Category: Bug|Logic|Evidence|Style|Missing Test|Security|Performance|Other] one-line summary
-   Principle: the objective, invariant, or constraint being violated.
-   Evidence: file/path/line, exact quote, command output, or concrete visual observation. If evidence is unavailable, write "Evidence: not available" and lower confidence.
-   Why it matters: one or two sentences.
-   Action: one concrete next step.
-10. Then include:
-   - Model used
-   - Findings
-   - Residual risks
-   - Suggested next action
-"@
-}
-
-$header = @"
-$roleLine
-
-Review scope:
-- Flow: $Flow
-- Project root: $resolvedRoot
-- Source: $($review.Source)
-- Task type: $TaskType
-- Selected model(s): $modelSummary
-- Selection reason: $selectionReason
-- Provider: $selectedProvider
-- Route(s): $routeSummary
-- Material mode: $materialMode
-- Prompt delivery: $promptDelivery
-- Image files: $($imageFiles.Count)
-- Vision: $visionStatus
-- Lite mode: $Lite
-- Max findings: $MaxFindings
-- Opinion count: $OpinionCount
-
-Review instructions:
-$flowInstructions
-
-Extra request from Codex:
+Additional request:
 $ExtraPrompt
-"@
 
-Set-Content -LiteralPath $inputFile -Value $review.Text -Encoding UTF8
-
-if ($review.Text.Length -le $InlineContentLimit) {
-    $prompt = @"
-$header
-
-Review material:
-
-$($review.Text)
-"@
-} else {
-    $wslInputForPrompt = ConvertTo-WslPath $inputFile
-    $prompt = @"
-$header
-
-The review material is large and has been written to this file:
-$wslInputForPrompt
-
-Read that file before reviewing.
-"@
-}
-
-Set-Content -LiteralPath $promptFile -Value $prompt -Encoding UTF8
-$promptCharCount = $prompt.Length
-$tokenEstimate = Get-TokenEstimate -Text $prompt
-$approxInputTokensPerPass = $tokenEstimate.MixedEstimate
-$englishBaselineTokensPerPass = $tokenEstimate.EnglishBaseline
-$estimatedTotalInputTokens = $approxInputTokensPerPass * $models.Count
-$tokenEstimateNote = "rough mixed CJK/code heuristic, not a billing tokenizer; actual provider tokens and output tokens may differ"
-$tokenScopeNote = if ($visionEnabled) {
-    "before output tokens; vision-result text is excluded, so image-heavy reviews may be higher"
-} else {
-    "before output tokens"
-}
-
-$reportHeader = @"
-# Hermes Review Report
-
-- Project: $resolvedRoot
-- Source: $($review.Source)
-- Files: $($review.FileCount)
-- Material mode: $materialMode
-- Prompt delivery: $promptDelivery
-- Material characters: $($review.Text.Length)
-- Prompt characters: $promptCharCount
-- Prompt CJK characters: $($tokenEstimate.CjkChars)
-- Approx input tokens per text pass: ~$approxInputTokensPerPass ($tokenEstimateNote)
-- English char/4 baseline per text pass: ~$englishBaselineTokensPerPass
-- Approx total input tokens across text passes: ~$estimatedTotalInputTokens ($tokenScopeNote)
-- Text model passes: $($models.Count)
-- Model(s): $modelSummary
-- Selection reason: $selectionReason
-- Provider: $selectedProvider
-- Route(s): $routeSummary
-- Image files: $($imageFiles.Count)
-- Vision: $visionStatus
-- Task type: $TaskType
-- Created: $(Get-Date -Format "yyyy-MM-dd HH:mm:ss")
-
-## Hermes Output
-
-"@
-Set-Content -LiteralPath $resolvedOutputPath -Value $reportHeader -Encoding UTF8
-
-Write-Host "Hermes review prepared."
-Write-Host "Project: $resolvedRoot"
-Write-Host "Flow: $Flow"
-Write-Host "Source: $($review.Source)"
-Write-Host "Files: $($review.FileCount)"
-Write-Host "Material: $materialMode"
-Write-Host "Delivery: $promptDelivery"
-Write-Host "Material chars: $($review.Text.Length)"
-Write-Host "Prompt chars: $promptCharCount"
-Write-Host "Prompt CJK chars: $($tokenEstimate.CjkChars)"
-Write-Host "Approx input tokens/pass: ~$approxInputTokensPerPass (char/4 baseline ~$englishBaselineTokensPerPass; $tokenEstimateNote)"
-Write-Host "Approx total input tokens: ~$estimatedTotalInputTokens across $($models.Count) text pass(es), $tokenScopeNote"
-Write-Host "Text passes: $($models.Count)"
-Write-Host "Provider: $selectedProvider"
-Write-Host "Routes: $routeSummary"
-Write-Host "Images: $($imageFiles.Count)"
-Write-Host "Vision: $visionStatus"
-if ($visionEnabled) {
-    Write-Host "Vision env: $resolvedHermesEnvPath"
-}
-Write-Host "Model(s): $modelSummary ($selectionReason)"
-Write-Host "Lite: $Lite"
-Write-Host "PathOnly: $usePathOnly"
-Write-Host "MaxFindings: $MaxFindings"
-Write-Host "OpinionCount: $OpinionCount"
-Write-Host "Prompt: $promptFile"
-if ($reportShouldPersist) {
-    Write-Host "Report: $resolvedOutputPath"
-} else {
-    Write-Host "Report: $resolvedOutputPath (temporary; deleted after run)"
-}
-if ($KeepTemp) {
-    Write-Host "Temporary files will be kept after Hermes exits."
-}
-if ($models.Count -ge 3) {
-    Write-Warning "This run will call $($models.Count) text models sequentially. Estimated total input tokens: ~$estimatedTotalInputTokens $tokenScopeNote."
-    if ($models.Count -ge 5) {
-        Write-Warning "For a cheaper review, consider -OpinionCount 3 or reducing the model list."
+Return exactly this sentinel-wrapped JSON and no Markdown fences or commentary:
+HERMES_JSON_BEGIN
+{
+  "coverage": "complete|incomplete|read-failed",
+  "findings": [
+    {
+      "severity": "CRITICAL|HIGH|MEDIUM|LOW",
+      "category": "string",
+      "summary": "string",
+      "principle": "string",
+      "evidence": "specific file/line/quote/command observation",
+      "confidence": 0.0,
+      "action": "one concrete action"
     }
+  ],
+  "residualRisks": ["string"]
+}
+HERMES_JSON_END
+"@
 }
 
-if ($visionEnabled) {
-    $visionEntries = foreach ($imageFile in $imageFiles) {
-        $item = Get-Item -LiteralPath $imageFile
-        [pscustomobject]@{
-            windows = $item.FullName
-            wsl = ConvertTo-WslPath $item.FullName
-            bytes = $item.Length
+function Resolve-ReportPath {
+    param([string]$Root, [string]$Requested, [switch]$Persist, [string]$Fallback)
+    if ($Requested) {
+        $target = if ([System.IO.Path]::IsPathRooted($Requested)) { $Requested } else { Join-Path $Root $Requested }
+        return [System.IO.Path]::ChangeExtension($target, ".json")
+    }
+    if ($Persist) {
+        $directory = Join-Path $Root ".codex-hermes-reviews"
+        [System.IO.Directory]::CreateDirectory($directory) | Out-Null
+        return Join-Path $directory ("review-" + (Get-Date -Format "yyyyMMdd-HHmmss") + ".json")
+    }
+    return $Fallback
+}
+
+function Test-ReviewerPayload {
+    param([object]$Payload, [string]$ReviewerModel, [int]$FindingLimit)
+    if ($null -eq $Payload) { throw "Reviewer returned an empty JSON payload." }
+    $coverage = [string](Get-ObjectProperty $Payload "coverage" "")
+    if (@("complete", "incomplete", "read-failed") -notcontains $coverage) { throw "Reviewer returned invalid coverage." }
+    if ($null -eq $Payload.PSObject.Properties["findings"]) { throw "Missing findings array." }
+    $findings = @($Payload.findings)
+    if ($findings.Count -gt $FindingLimit) { throw "Reviewer returned more than $FindingLimit findings." }
+    $normalized = @()
+    foreach ($finding in $findings) {
+        $severity = ([string](Get-ObjectProperty $finding "severity" "")).ToUpperInvariant()
+        if (@("CRITICAL", "HIGH", "MEDIUM", "LOW") -notcontains $severity) { throw "Invalid finding severity." }
+        $category = [string](Get-ObjectProperty $finding "category" "")
+        $summary = [string](Get-ObjectProperty $finding "summary" "")
+        $principle = [string](Get-ObjectProperty $finding "principle" "")
+        $evidence = [string](Get-ObjectProperty $finding "evidence" "")
+        $action = [string](Get-ObjectProperty $finding "action" "")
+        if (-not $category -or -not $summary -or -not $principle -or -not $evidence -or -not $action) { throw "Finding is missing a required string field." }
+        try { $confidence = [double](Get-ObjectProperty $finding "confidence" $null) } catch { throw "Invalid finding confidence." }
+        if ($confidence -lt 0 -or $confidence -gt 1) { throw "Finding confidence must be between 0 and 1." }
+        $normalized += [pscustomobject][ordered]@{
+            reviewer = $ReviewerModel
+            severity = $severity
+            category = $category
+            summary = $summary
+            principle = $principle
+            evidence = $evidence
+            confidence = $confidence
+            action = $action
         }
     }
-    $visionManifest = [pscustomobject]@{
-        images = @($visionEntries)
+    return [pscustomobject]@{
+        Findings = @($normalized)
+        ResidualRisks = @((Get-ObjectProperty $Payload "residualRisks" @()) | ForEach-Object { [string]$_ })
     }
-    [System.IO.File]::WriteAllText($visionManifestFile, ($visionManifest | ConvertTo-Json -Depth 6), [System.Text.UTF8Encoding]::new($false))
-    [System.IO.File]::WriteAllText($visionResultFile, "", [System.Text.UTF8Encoding]::new($false))
-    Write-VisionRunnerScript -Path $visionScriptFile
 }
+
+function Get-ReviewerJsonText {
+    param([string]$RawText)
+    $clean = $RawText.Trim()
+    if ($clean -match '(?s)HERMES_JSON_BEGIN\s*(\{.*\})\s*HERMES_JSON_END') {
+        return $Matches[1].Trim()
+    }
+    if ($clean -match '(?s)^```(?:json)?\s*(.*?)\s*```$') {
+        return $Matches[1].Trim()
+    }
+    $start = $clean.IndexOf("{")
+    $end = $clean.LastIndexOf("}")
+    if ($start -ge 0 -and $end -gt $start) {
+        return $clean.Substring($start, $end - $start + 1)
+    }
+    return $clean
+}
+
+function Remove-TemporaryFiles {
+    param([string[]]$Targets)
+    foreach ($target in @($Targets | Where-Object { $_ } | Sort-Object -Unique)) {
+        Remove-Item -LiteralPath $target -Force -ErrorAction SilentlyContinue
+    }
+}
+
+function Invoke-WslCommand {
+    param(
+        [string[]]$Arguments,
+        [string[]]$ProgressStatusFiles = @(),
+        [string[]]$ProgressModels = @()
+    )
+    $startInfo = [System.Diagnostics.ProcessStartInfo]::new()
+    $startInfo.FileName = "wsl.exe"
+    $startInfo.Arguments = (@($Arguments | ForEach-Object {
+        $value = [string]$_
+        if ($value -notmatch '[\s"]') { $value } else { '"' + $value.Replace('"', '\"') + '"' }
+    }) -join " ")
+    $startInfo.UseShellExecute = $false
+    $startInfo.RedirectStandardOutput = $true
+    $startInfo.RedirectStandardError = $true
+    $startInfo.StandardErrorEncoding = [System.Text.Encoding]::Unicode
+    $process = [System.Diagnostics.Process]::new()
+    $process.StartInfo = $startInfo
+    if (-not $process.Start()) { throw "Could not start wsl.exe." }
+    $stdout = $process.StandardOutput.ReadToEndAsync()
+    $stderr = $process.StandardError.ReadToEndAsync()
+    $lastStatuses = @{}
+    $nextHeartbeat = (Get-Date).AddSeconds(20)
+    while (-not $process.HasExited) {
+        for ($index = 0; $index -lt @($ProgressStatusFiles).Count; $index++) {
+            $statusFile = $ProgressStatusFiles[$index]
+            if (-not (Test-Path -LiteralPath $statusFile)) { continue }
+            $statusText = ""
+            try { $statusText = (Get-Content -LiteralPath $statusFile -Raw -Encoding UTF8).Trim() } catch { continue }
+            if ($statusText -notmatch '^\d+\|\d+\|\d+$') { continue }
+            $previousStatus = if ($lastStatuses.ContainsKey($index)) { [string]$lastStatuses[$index] } else { "" }
+            if (-not $statusText -or $previousStatus -eq $statusText) { continue }
+            $lastStatuses[$index] = $statusText
+            $model = if ($index -lt @($ProgressModels).Count) { $ProgressModels[$index] } else { "reviewer-$index" }
+            $exitPart = ($statusText -split '\|')[0]
+            Write-Host "Reviewer completed: $model (exit $exitPart)"
+        }
+        if ((Get-Date) -ge $nextHeartbeat) {
+            $completed = @($lastStatuses.Keys).Count
+            Write-Host "Hermes still running; completed reviewers: $completed/$(@($ProgressStatusFiles).Count)."
+            $nextHeartbeat = (Get-Date).AddSeconds(20)
+        }
+        Start-Sleep -Milliseconds 500
+    }
+    $process.WaitForExit()
+    for ($index = 0; $index -lt @($ProgressStatusFiles).Count; $index++) {
+        $statusFile = $ProgressStatusFiles[$index]
+        if (-not (Test-Path -LiteralPath $statusFile)) { continue }
+        $statusText = ""
+        try { $statusText = (Get-Content -LiteralPath $statusFile -Raw -Encoding UTF8).Trim() } catch { continue }
+        if ($statusText -notmatch '^\d+\|\d+\|\d+$') { continue }
+        $previousStatus = if ($lastStatuses.ContainsKey($index)) { [string]$lastStatuses[$index] } else { "" }
+        if ($statusText -and $previousStatus -ne $statusText) {
+            $lastStatuses[$index] = $statusText
+            $model = if ($index -lt @($ProgressModels).Count) { $ProgressModels[$index] } else { "reviewer-$index" }
+            $exitPart = ($statusText -split '\|')[0]
+            Write-Host "Reviewer completed: $model (exit $exitPart)"
+        }
+    }
+    return [pscustomobject]@{ ExitCode = $process.ExitCode; Stdout = $stdout.Result.Trim(); Stderr = $stderr.Result.Trim() }
+}
+
+function Get-DiagnosticSummary {
+    param([string]$Text)
+    $summary = (($Text -replace [char]0, '' -replace '\s+', ' ').Trim())
+    if ($summary -match 'WSL_E_[A-Z_]+') { return "WSL error: $($Matches[0])" }
+    if ($summary.Length -gt 1200) { return $summary.Substring(0, 1200) + "..." }
+    return $summary
+}
+
+$presetWasExplicit = $PSBoundParameters.ContainsKey("Preset")
+if ($Flow) {
+    $legacyFlowPresets = @{ "delegate" = "delegate"; "paper-independent" = "paper"; "code-global" = "code"; "code-hybrid" = "code-deep" }
+    if (-not $legacyFlowPresets.ContainsKey($Flow)) {
+        throw "Unsupported legacy -Flow '$Flow'. Use -Preset delegate, paper, paper-deep, code, or code-deep."
+    }
+    $legacyPreset = $legacyFlowPresets[$Flow]
+    if ($presetWasExplicit -and $Preset -ne $legacyPreset) {
+        throw "-Flow '$Flow' conflicts with -Preset '$Preset'. Use only -Preset."
+    }
+    $Preset = $legacyPreset
+} elseif (-not $presetWasExplicit) {
+    if ($Mode -eq "flash" -or $Lite) {
+        $Preset = "delegate"
+    } elseif ($TaskType -eq "paper") {
+        $Preset = "paper"
+    }
+}
+if (-not $PSBoundParameters.ContainsKey("Concurrency") -and $Preset -like "paper*") { $Concurrency = 3 }
+if ($ExtraPrompt) {
+    $promptParts = @()
+    if ($Prompt) { $promptParts += $Prompt }
+    $promptParts += $ExtraPrompt
+    $Prompt = $promptParts -join "`n`n"
+}
+
+$Configuration = Read-JsonFile $ConfigPath
+$resolvedRoot = (Resolve-Path -LiteralPath $ProjectRoot).Path
+$profile = Resolve-Assignments -Configuration $Configuration -PresetName $Preset -RequestedModels $Models
+$assignments = @($profile.Assignments)
+if ($assignments.Count -eq 0) { throw "Preset resolved no reviewers." }
+
+$explicitFiles = @(Resolve-ExplicitFiles -Items $Path -Root $resolvedRoot)
+$missingFiles = @()
+$gitDiff = ""
+if ($Preset -like "paper*" -and $explicitFiles.Count -eq 0) {
+    throw "Paper presets require explicit -Path files for a complete shared snapshot."
+}
+if ($explicitFiles.Count -eq 0) {
+    if (-not (Test-GitRepository $resolvedRoot)) {
+        throw "No explicit files were provided and ProjectRoot is not a git repository."
+    }
+    $selection = Get-GitSelection $resolvedRoot
+    $explicitFiles = @($selection.Files)
+    $missingFiles = @($selection.Missing)
+    $gitDiff = $selection.Diff
+    if ($selection.Names.Count -eq 0) { throw "No staged, unstaged, deleted, or untracked files were found." }
+}
+
+if ($Vision -eq "shared" -and -not $AllowImageUpload) {
+    $containsImage = @($explicitFiles | Where-Object { $ImageExtensions -contains ([System.IO.Path]::GetExtension($_).ToLowerInvariant()) }).Count -gt 0
+    if ($containsImage) { throw "Image upload requires -AllowImageUpload." }
+}
+
+$tempBase = Join-Path $env:TEMP ("hermes-review-" + [guid]::NewGuid().ToString("N"))
+$bundleFile = "$tempBase.bundle.md"
+$runnerFile = "$tempBase.runner.sh"
+$visionManifestFile = "$tempBase.images.json"
+$visionPromptFile = "$tempBase.vision-prompt.md"
+$visionResultFile = "$tempBase.vision-result.md"
+$temporaryFiles = @($bundleFile, $runnerFile, $visionManifestFile, $visionPromptFile, $visionResultFile)
+
+$bundle = New-MaterialBundle -Files $explicitFiles -Missing $missingFiles -GitDiff $gitDiff -TempBase $tempBase -VisionMode $Vision -ImageUploadAllowed:$AllowImageUpload
+$temporaryFiles += @($bundle.TemporaryPaths)
+if ((Test-SensitiveText $bundle.Text) -and -not $AllowSensitiveInput) {
+    Remove-TemporaryFiles $temporaryFiles
+    throw "High-confidence sensitive content was detected. Review locally or pass -AllowSensitiveInput after verifying the external data scope."
+}
+Write-Utf8File $bundleFile $bundle.Text
+
+$reportPersistent = ($KeepReport -or $OutputPath)
+$reportPath = Resolve-ReportPath -Root $resolvedRoot -Requested $OutputPath -Persist:$KeepReport -Fallback "$tempBase.result.json"
+$reportParent = Split-Path -Parent $reportPath
+if ($reportParent) { [System.IO.Directory]::CreateDirectory($reportParent) | Out-Null }
+
+$wslBundle = ConvertTo-WslPath $bundleFile
+$promptFiles = @()
+$outputFiles = @()
+$statusFiles = @()
+for ($index = 0; $index -lt $assignments.Count; $index++) {
+    $promptFile = "$tempBase.reviewer-$index.prompt.md"
+    $outputFile = "$tempBase.reviewer-$index.output.json"
+    $statusFile = "$tempBase.reviewer-$index.status"
+    $reviewerPrompt = New-ReviewerPrompt -Kind $profile.Kind -Assignment $assignments[$index] -BundlePath $wslBundle -SnapshotId $bundle.Id -Coverage $bundle.Coverage -FindingLimit $MaxFindings -ExtraPrompt $Prompt -PanelSize $assignments.Count
+    Write-Utf8File $promptFile $reviewerPrompt
+    Write-Utf8File $outputFile ""
+    Write-Utf8File $statusFile ""
+    $promptFiles += $promptFile
+    $outputFiles += $outputFile
+    $statusFiles += $statusFile
+}
+$temporaryFiles += $promptFiles + $outputFiles + $statusFiles
+
+$visionEnabled = ($Vision -eq "shared" -and @($bundle.ImageSnapshots).Count -gt 0)
+if ($visionEnabled) {
+    if (-not (Test-Path -LiteralPath $VisionScriptPath)) { throw "Missing vision sidecar: $VisionScriptPath" }
+    $visionImages = @($bundle.ImageSnapshots | ForEach-Object { [pscustomobject]@{ path = ConvertTo-WslPath $_ } })
+    Write-Utf8File $visionManifestFile ([pscustomobject]@{ images = $visionImages } | ConvertTo-Json -Depth 4)
+    Write-Utf8File $visionPromptFile "Review every image in snapshot $($bundle.Id). $Prompt"
+    Write-Utf8File $visionResultFile ""
+}
+
+$reviewerRecords = foreach ($assignment in $assignments) {
+    [ordered]@{
+        model = $assignment.Model
+        provider = $assignment.Provider
+        role = $assignment.Role
+        status = "prepared"
+        durationSec = 0
+        findings = @()
+        residualRisks = @()
+        error = ""
+    }
+}
+$report = [ordered]@{
+    schemaVersion = "2.1"
+    runStatus = "prepared"
+    preset = $Preset
+    snapshot = [ordered]@{
+        id = $bundle.Id
+        coverage = $bundle.Coverage
+        files = @($bundle.Manifest)
+    }
+    material = [ordered]@{
+        characters = $bundle.Text.Length
+        approximateTokensPerReviewer = [Math]::Ceiling($bundle.Text.Length / 4.0)
+        reviewerCount = $assignments.Count
+    }
+    transport = [ordered]@{
+        preflightExitCode = $null
+        runnerExitCode = $null
+        nonFatalDiagnostics = @()
+        failureDiagnostic = ""
+    }
+    reviewers = @($reviewerRecords)
+}
+Write-Utf8File $reportPath ($report | ConvertTo-Json -Depth 12)
+
+Write-Host "Hermes review prepared; reviewers have not run yet. Do not treat this as a result."
+Write-Host "Preset: $Preset"
+Write-Host "Snapshot: $($bundle.Id)"
+Write-Host "Coverage: $($bundle.Coverage)"
+Write-Host "Files: $(@($bundle.Manifest).Count)"
+Write-Host "Material chars: $($bundle.Text.Length)"
+Write-Host "Approx tokens/reviewer: ~$([Math]::Ceiling($bundle.Text.Length / 4.0))"
+Write-Host "Reviewers: $(($assignments | ForEach-Object { "$($_.Model)($($_.Provider);$($_.Role))" }) -join ', ')"
+Write-Host "Timeout: $TimeoutSec seconds; concurrency: $Concurrency"
+Write-Host "Vision: $(if ($visionEnabled) { 'shared' } elseif (@($bundle.ImageSnapshots).Count -gt 0) { 'blocked' } else { 'off' })"
+Write-Host "Report: $reportPath$(if (-not $reportPersistent) { ' (temporary)' })"
+
+$wslPromptFiles = @($promptFiles | ForEach-Object { ConvertTo-WslPath $_ })
+$wslOutputFiles = @($outputFiles | ForEach-Object { ConvertTo-WslPath $_ })
+$wslStatusFiles = @($statusFiles | ForEach-Object { ConvertTo-WslPath $_ })
+$runnerLines = @(
+    "#!/usr/bin/env bash",
+    "set -uo pipefail",
+    'export PATH="$HOME/.local/bin:$PATH"',
+    'trap ''for pid in $(jobs -pr); do kill "$pid" 2>/dev/null || true; done'' INT TERM EXIT',
+    "cd $(Quote-Bash (ConvertTo-WslPath $resolvedRoot))",
+    "reviewer_timeout=$TimeoutSec",
+    "status=0",
+    'shared_vision_result=""'
+)
+
+if ($visionEnabled) {
+    $visionDefinition = $Configuration.vision
+    $runnerLines += "shared_vision_result=$(Quote-Bash (ConvertTo-WslPath $visionResultFile))"
+    $runnerLines += ('python3 ' + (Quote-Bash (ConvertTo-WslPath $VisionScriptPath)) + ' --manifest ' + (Quote-Bash (ConvertTo-WslPath $visionManifestFile)) + ' --prompt ' + (Quote-Bash (ConvertTo-WslPath $visionPromptFile)) + ' --model ' + (Quote-Bash ([string]$visionDefinition.model)) + ' --env-file ' + (Quote-Bash ([string]$visionDefinition.envFile)) + ' --max-image-bytes ' + ([int]$visionDefinition.maxImageMb * 1MB) + ' > "$shared_vision_result" 2>&1')
+    $runnerLines += 'vision_exit=$?; if [ "$vision_exit" -ne 0 ]; then status="$vision_exit"; fi'
+}
+
+$liteArgument = if ($Preset -eq "delegate") { " --ignore-rules" } else { "" }
+$runnerLines += @(
+    'run_reviewer() {',
+    '  local model="$1" provider="$2" prompt_path="$3" output_path="$4" status_path="$5"',
+    '  local prompt exit_code started ended',
+    '  prompt="$(cat "$prompt_path")"',
+    '  if [ -n "$shared_vision_result" ] && [ -s "$shared_vision_result" ]; then prompt="$(printf "%s\n\n## Shared visual evidence\n\n%s" "$prompt" "$(cat "$shared_vision_result")")"; fi',
+    '  started=$(date +%s)',
+    ('  timeout --kill-after=10s "$reviewer_timeout" hermes' + $liteArgument + ' --provider "$provider" -m "$model" -z "$prompt" > "$output_path" 2>&1'),
+    '  exit_code=$?',
+    '  ended=$(date +%s)',
+    '  printf "%s|%s|%s" "$exit_code" "$started" "$ended" > "$status_path"',
+    '  return 0',
+    '}'
+)
+
+$calls = @()
+for ($index = 0; $index -lt $assignments.Count; $index++) {
+    $calls += "run_reviewer $(Quote-Bash $assignments[$index].Model) $(Quote-Bash $assignments[$index].Provider) $(Quote-Bash $wslPromptFiles[$index]) $(Quote-Bash $wslOutputFiles[$index]) $(Quote-Bash $wslStatusFiles[$index])"
+}
+for ($start = 0; $start -lt $calls.Count; $start += $Concurrency) {
+    $end = [Math]::Min($start + $Concurrency, $calls.Count)
+    for ($index = $start; $index -lt $end; $index++) { $runnerLines += "$($calls[$index]) &" }
+    $runnerLines += 'wait || true'
+}
+for ($index = 0; $index -lt $statusFiles.Count; $index++) {
+    $runnerLines += ('reviewer_exit=$(cut -d''|'' -f1 ' + (Quote-Bash $wslStatusFiles[$index]) + '); if [ -z "$reviewer_exit" ]; then reviewer_exit=1; fi; if [ "$reviewer_exit" -ne 0 ] && [ "$status" -eq 0 ]; then status="$reviewer_exit"; fi')
+}
+$runnerLines += 'trap - INT TERM EXIT'
+$runnerLines += 'exit "$status"'
+Write-Utf8File $runnerFile (($runnerLines -join "`n") + "`n")
 
 if ($NoRun) {
     Write-Host "NoRun set; Hermes was not called."
-    if (-not $KeepTemp) {
-        Remove-Item -LiteralPath $inputFile, $promptFile, $runnerFile, $visionScriptFile, $visionManifestFile, $visionResultFile -Force -ErrorAction SilentlyContinue
-    }
-    if (-not $reportShouldPersist) {
-        Remove-Item -LiteralPath $resolvedOutputPath -Force -ErrorAction SilentlyContinue
-    }
+    if ($KeepTemp) { Write-Host "Temporary files kept at prefix: $tempBase" }
+    if (-not $KeepTemp) { Remove-TemporaryFiles $temporaryFiles }
+    if (-not $reportPersistent -and -not $KeepTemp) { Remove-Item -LiteralPath $reportPath -Force -ErrorAction SilentlyContinue }
     exit 0
 }
 
-$wslProject = ConvertTo-WslPath $resolvedRoot
-$wslPrompt = ConvertTo-WslPath $promptFile
-$wslOutput = ConvertTo-WslPath $resolvedOutputPath
-$wslVisionScript = if ($visionEnabled) { ConvertTo-WslPath $visionScriptFile } else { "" }
-$wslVisionManifest = if ($visionEnabled) { ConvertTo-WslPath $visionManifestFile } else { "" }
-$wslVisionResult = if ($visionEnabled) { ConvertTo-WslPath $visionResultFile } else { "" }
-$wslHermesEnv = if ($visionEnabled) { $resolvedHermesEnvPath } else { "" }
-
-& wsl.exe -d $WslDistro -- bash -lc 'export PATH="$HOME/.local/bin:$PATH"; command -v hermes >/dev/null'
-if ($LASTEXITCODE -ne 0) {
-    Write-Error "Hermes CLI was not found in WSL distro '$WslDistro'. Confirm the distro name with 'wsl -l -v' and make sure 'hermes' is on PATH inside WSL."
+$report.runStatus = "preflight"
+Write-Utf8File $reportPath ($report | ConvertTo-Json -Depth 12)
+$preflight = Invoke-WslCommand -Arguments @("-d", $WslDistro, "--", "bash", "-lc", 'export PATH="\$HOME/.local/bin:\$PATH"; command -v hermes >/dev/null')
+$report.transport.preflightExitCode = $preflight.ExitCode
+if ($preflight.ExitCode -ne 0) {
+    $report.runStatus = "failed"
+    $report.transport.failureDiagnostic = Get-DiagnosticSummary $(if ($preflight.Stderr) { $preflight.Stderr } else { $preflight.Stdout })
+    if (-not $report.transport.failureDiagnostic) { $report.transport.failureDiagnostic = "WSL preflight exited with code $($preflight.ExitCode)." }
+    Write-Utf8File $reportPath ($report | ConvertTo-Json -Depth 12)
+    Write-Host "Preflight diagnostics retained at: $reportPath"
+    throw "Hermes CLI was not found in WSL distro '$WslDistro'. $($report.transport.failureDiagnostic)"
+}
+if ($preflight.Stderr) {
+    $report.transport.nonFatalDiagnostics += "WSL emitted startup diagnostics, but the Hermes preflight succeeded."
+    Write-Host "WSL preflight succeeded with non-fatal startup diagnostics."
+}
+if ($visionEnabled) {
+    $visionPreflight = Invoke-WslCommand -Arguments @("-d", $WslDistro, "--", "bash", "-lc", 'command -v python3 >/dev/null')
+    if ($visionPreflight.ExitCode -ne 0) {
+        $report.runStatus = "failed"
+        $report.transport.failureDiagnostic = "python3 is required for shared vision review."
+        Write-Utf8File $reportPath ($report | ConvertTo-Json -Depth 12)
+        throw $report.transport.failureDiagnostic
+    }
+    if ($visionPreflight.Stderr) { $report.transport.nonFatalDiagnostics += "WSL emitted startup diagnostics during vision preflight." }
 }
 
-if ($visionEnabled) {
-    & wsl.exe -d $WslDistro -- bash -lc 'export PATH="$HOME/.local/bin:$PATH"; command -v python3 >/dev/null'
-    if ($LASTEXITCODE -ne 0) {
-        Write-Error "python3 was not found in WSL distro '$WslDistro'. Vision review requires Python 3 inside WSL."
+Write-Host "Running Hermes..."
+$report.runStatus = "running"
+Write-Utf8File $reportPath ($report | ConvertTo-Json -Depth 12)
+Write-Host "Reviewer queue: $($assignments.Count); concurrency: $Concurrency."
+$runner = Invoke-WslCommand -Arguments @("-d", $WslDistro, "--", "bash", (ConvertTo-WslPath $runnerFile)) -ProgressStatusFiles $statusFiles -ProgressModels @($assignments | ForEach-Object { $_.Model })
+$runnerExit = $runner.ExitCode
+$report.transport.runnerExitCode = $runnerExit
+if ($runnerExit -eq 0 -and $runner.Stderr) {
+    $report.transport.nonFatalDiagnostics += "WSL emitted non-fatal runtime diagnostics; reviewer completion states are authoritative."
+    Write-Host "WSL runner completed with non-fatal diagnostics; inspecting reviewer states."
+} elseif ($runnerExit -ne 0) {
+    $report.transport.failureDiagnostic = Get-DiagnosticSummary $(if ($runner.Stderr) { $runner.Stderr } else { $runner.Stdout })
+    if (-not $report.transport.failureDiagnostic) { $report.transport.failureDiagnostic = "WSL runner exited with code $runnerExit." }
+}
+$report.runStatus = "collecting"
+Write-Utf8File $reportPath ($report | ConvertTo-Json -Depth 12)
+$parseFailure = $false
+
+for ($index = 0; $index -lt $assignments.Count; $index++) {
+    $record = $report.reviewers[$index]
+    $statusText = ""
+    try {
+        if (Test-Path -LiteralPath $statusFiles[$index]) { $statusText = (Get-Content -LiteralPath $statusFiles[$index] -Raw -Encoding UTF8).Trim() }
+    } catch {
+        $statusText = ""
+    }
+    if ($statusText -notmatch '^\d+\|\d+\|\d+$') {
+        $record.status = "failed"
+        $record.error = "Reviewer status file was missing or malformed."
+        continue
+    }
+    $statusParts = @($statusText -split '\|')
+    $exitCode = if ($statusParts.Count -ge 1 -and $statusParts[0] -match '^\d+$') { [int]$statusParts[0] } else { 1 }
+    $record.durationSec = [Math]::Max(0, ([long]$statusParts[2] - [long]$statusParts[1]))
+    if ($exitCode -eq 124) {
+        $record.status = "timed-out"
+        $record.error = "Reviewer exceeded $TimeoutSec seconds."
+        continue
+    }
+    if ($exitCode -ne 0) {
+        $record.status = "failed"
+        $record.error = "Hermes exited with code $exitCode."
+        continue
+    }
+
+    $raw = ""
+    try {
+        if (Test-Path -LiteralPath $outputFiles[$index]) { $raw = Get-Content -LiteralPath $outputFiles[$index] -Raw -Encoding UTF8 }
+    } catch {
+        $record.status = "invalid-output"
+        $record.error = "Reviewer output could not be read as UTF-8."
+        $parseFailure = $true
+        continue
+    }
+    $jsonText = Get-ReviewerJsonText $raw
+    try {
+        $payload = $jsonText | ConvertFrom-Json
+        $validated = Test-ReviewerPayload -Payload $payload -ReviewerModel $assignments[$index].Model -FindingLimit $MaxFindings
+        $record.status = "completed"
+        $record.findings = @($validated.Findings)
+        $record.residualRisks = @($validated.ResidualRisks)
+    } catch {
+        $record.status = "invalid-output"
+        $record.error = $_.Exception.Message
+        $parseFailure = $true
     }
 }
 
-$liteArgs = ""
-if ($Lite) {
-    $liteArgs = " --ignore-rules"
+$incompleteReviewers = @($report.reviewers | Where-Object { $_.status -ne "completed" }).Count -gt 0
+$report.runStatus = if ($runnerExit -ne 0 -or $parseFailure -or $incompleteReviewers) { "failed" } else { "completed" }
+Write-Utf8File $reportPath ($report | ConvertTo-Json -Depth 12)
+Write-Host "Hermes review finished."
+Write-Host "Reviewer states: $(($report.reviewers | ForEach-Object { "$($_.model)=$($_.status)" }) -join ', ')"
+$preserveFailureReport = ($report.runStatus -ne "completed")
+if ($preserveFailureReport -and -not $reportPersistent) {
+    Write-Host "Failure diagnostics retained at: $reportPath"
 }
+Write-Output (Get-Content -LiteralPath $reportPath -Raw -Encoding UTF8)
 
-$cdLine = "cd $(Quote-Bash $wslProject)"
-$promptLine = "prompt=`$(cat $(Quote-Bash $wslPrompt))"
-$runLines = @("status=0")
-if ($visionEnabled) {
-    $quotedVisionModel = Quote-Bash $resolvedVisionModel
-    $quotedVisionScript = Quote-Bash $wslVisionScript
-    $quotedVisionManifest = Quote-Bash $wslVisionManifest
-    $quotedVisionPrompt = Quote-Bash $wslPrompt
-    $quotedVisionOutput = Quote-Bash $wslOutput
-    $quotedVisionResult = Quote-Bash $wslVisionResult
-    $quotedHermesEnv = Quote-Bash $wslHermesEnv
-    $maxImageBytes = $MaxImageMb * 1MB
-    $runLines += "printf '\n\n---\n\n## Hermes vision pass: %s (alibaba)\n\n' $quotedVisionModel | tee -a $quotedVisionOutput"
-    $runLines += "python3 $quotedVisionScript --manifest $quotedVisionManifest --prompt $quotedVisionPrompt --model $quotedVisionModel --max-image-bytes $maxImageBytes --env-file $quotedHermesEnv 2>&1 | tee $quotedVisionResult | tee -a $quotedVisionOutput"
-    $runLines += 'cmd_status=${PIPESTATUS[0]}; if [ "$cmd_status" -ne 0 ] && [ "$status" -eq 0 ]; then status="$cmd_status"; fi'
-    $runLines += 'if [ -s ' + $quotedVisionResult + ' ]; then'
-    $runLines += '  prompt="$(printf "%s\n\n## Vision sidecar result\n\n%s" "$prompt" "$(cat ' + $quotedVisionResult + ')")"'
-    $runLines += 'fi'
-}
-foreach ($runModel in $models) {
-    $quotedModel = Quote-Bash $runModel
-    $runProvider = Select-HermesProvider -ModelName $runModel -RequestedProvider $Provider
-    $quotedProvider = Quote-Bash $runProvider
-    $quotedOutput = Quote-Bash $wslOutput
-    $runLines += "printf '\n\n---\n\n## Hermes pass: %s (%s)\n\n' $quotedModel $quotedProvider | tee -a $quotedOutput"
-    $runLines += "hermes$liteArgs --provider $quotedProvider -m $quotedModel -z `"`$prompt`" 2>&1 | tee -a $quotedOutput"
-    $runLines += 'cmd_status=${PIPESTATUS[0]}; if [ "$cmd_status" -ne 0 ] && [ "$status" -eq 0 ]; then status="$cmd_status"; fi'
-}
-$runnerLines = @(
-    "#!/usr/bin/env bash",
-    "set -euo pipefail",
-    'export PATH="$HOME/.local/bin:$PATH"',
-    $cdLine,
-    $promptLine
-) + $runLines + @(
-    'exit "$status"'
-)
-$runnerText = ($runnerLines -join "`n") + "`n"
-[System.IO.File]::WriteAllText($runnerFile, $runnerText, [System.Text.UTF8Encoding]::new($false))
-$wslRunner = ConvertTo-WslPath $runnerFile
-
-Write-Host ""
-Write-Host "Running Hermes..."
-& wsl.exe -d $WslDistro -- bash $wslRunner
-$hermesExitCode = $LASTEXITCODE
-
-if (-not $KeepTemp) {
-    Remove-Item -LiteralPath $inputFile, $promptFile, $runnerFile, $visionScriptFile, $visionManifestFile, $visionResultFile -Force -ErrorAction SilentlyContinue
-}
-
-if (-not $reportShouldPersist) {
-    Remove-Item -LiteralPath $resolvedOutputPath -Force -ErrorAction SilentlyContinue
-}
-
-exit $hermesExitCode
+if (-not $KeepTemp) { Remove-TemporaryFiles $temporaryFiles }
+if (-not $reportPersistent -and -not $preserveFailureReport) { Remove-Item -LiteralPath $reportPath -Force -ErrorAction SilentlyContinue }
+if ($runnerExit -ne 0) { exit $runnerExit }
+if ($parseFailure) { exit 1 }
+exit 0
