@@ -1,0 +1,55 @@
+{
+  "models": {
+    "qwen3.6-flash": { "provider": "alibaba", "class": "economy" },
+    "qwen3.7-plus": { "provider": "alibaba", "class": "strong" },
+    "deepseek-v4-flash": { "provider": "deepseek", "class": "economy" },
+    "deepseek-v4-pro": { "provider": "deepseek", "class": "strong" },
+    "glm-5.2": { "provider": "alibaba", "class": "strong" }
+  },
+  "presets": {
+    "delegate": {
+      "kind": "delegate",
+      "reviewers": [
+        { "model": "qwen3.6-flash", "role": "delegate" }
+      ]
+    },
+    "paper": {
+      "kind": "paper",
+      "reviewers": [
+        { "model": "deepseek-v4-pro", "role": "holistic" },
+        { "model": "deepseek-v4-flash", "role": "holistic" },
+        { "model": "qwen3.7-plus", "role": "holistic" }
+      ]
+    },
+    "paper-deep": {
+      "kind": "paper",
+      "reviewers": [
+        { "model": "deepseek-v4-pro", "role": "holistic" },
+        { "model": "deepseek-v4-flash", "role": "holistic" },
+        { "model": "qwen3.7-plus", "role": "holistic" },
+        { "model": "glm-5.2", "role": "holistic" },
+        { "model": "qwen3.6-flash", "role": "holistic" }
+      ]
+    },
+    "code": {
+      "kind": "code",
+      "reviewers": [
+        { "model": "glm-5.2", "role": "holistic" }
+      ]
+    },
+    "code-deep": {
+      "kind": "code",
+      "reviewers": [
+        { "model": "glm-5.2", "role": "holistic" },
+        { "model": "qwen3.7-plus", "role": "security" },
+        { "model": "deepseek-v4-pro", "role": "correctness-tests" }
+      ]
+    }
+  },
+  "vision": {
+    "model": "qwen3.7-plus",
+    "provider": "alibaba",
+    "envFile": "/root/.hermes/.env",
+    "maxImageMb": 10
+  }
+}

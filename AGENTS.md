@@ -4,18 +4,22 @@ Use Chinese for user-facing discussion in this workspace. Keep repository files 
 
 ## Scope
 
-This project packages a local Codex -> Hermes workflow:
-
-- PowerShell wrapper in `tools/hermes-review.ps1`
-- self-contained Codex Skill in `skills/hermes-review/`
-- reusable `AGENTS.md` templates in `examples/`
-- no-token smoke tests in `tests/`
+This project packages a minimal local Codex -> Hermes workflow. `skills/hermes-review/` is the only implementation source; `tools/hermes-review.ps1` is a compatibility shim.
 
 ## Rules
 
 1. Do not commit API keys, provider config, real manuscript content, private paths, or local logs.
-2. Keep `tools/hermes-review.ps1` and `skills/hermes-review/scripts/hermes-review.ps1` synchronized.
-3. Use `tests/smoke-no-run.ps1` after wrapper, Skill, or example-template changes.
-4. Keep the Skill concise. Put human-facing explanation in `README.md`, not in `SKILL.md`.
-5. Preserve the default behavior that Markdown reports are temporary unless `-KeepReport` or `-OutputPath` is explicitly used.
-6. Prefer `Hermes-first flash + PathOnly + Lite` for simple checks and `Codex-led + Hermes pro review` for complex changes.
+2. Keep the top-level wrapper at 10 lines or fewer and never duplicate the canonical implementation.
+3. Use `tests/smoke-no-run.ps1` after wrapper, Skill, config, or template changes.
+4. Keep the Skill concise. Put the only full human-facing manual in `README.md`.
+5. Keep reports temporary unless `-KeepReport` or `-OutputPath` is explicit.
+6. Maintain one profile config, one result schema, and one JSON output format.
+7. Keep the canonical script under 900 lines and smoke tests under 250 lines.
+8. Do not add MCP, daemon, database, queue, Web UI, generated copies, or model-based synthesis inside the wrapper.
+
+## Minimal-change guardrails
+
+- State the root cause and assumptions before changing code; do not silently choose among ambiguous interpretations.
+- Prefer an existing file, configuration switch, or built-in capability over a new file or abstraction.
+- Do not add speculative flexibility, duplicate implementations, or adjacent cleanup; every changed line must trace to the request.
+- Define a testable success condition and run it before declaring the change complete.
