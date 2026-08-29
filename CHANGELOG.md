@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.4.0
+
+- Configured Qwen3.8-Flash through Alibaba Model Studio as the deterministic default (`routing.defaultWorker: quick`); DeepSeek-V4-Flash remains an explicit-only route through the official DeepSeek API.
+- Hardened team input validation and Git evidence so missing task IDs and committed out-of-scope files are reported before acceptance.
+- Added the TypeScript stdio MCP execution core for Codex-managed Hermes Worker and Team tasks.
+- Added YAML/Zod Team, Worker, Model, Provider registries with deterministic routing and no silent paid fallback.
+- Added direct and configurable WSL runtimes, Hermes profile discovery, health/doctor, timeout handling, and automatic `--query` / `--query-file -` compatibility.
+- Added Task Contracts, deterministic Git evidence, allowed-path checks, structured worker results, bounded parallel execution, and isolated worktrees without auto-merge.
+- Added the `hermes-team` execution Skill while preserving the existing `hermes-review` pipeline as an explicit compatibility feature.
+- Added disposable real-runtime smoke coverage for configured Qwen and DeepSeek routes without storing credentials.
+
 ## 0.3.0
 
 - Replaced overlapping routing parameters with five presets: delegate, paper, paper-deep, code, and code-deep.

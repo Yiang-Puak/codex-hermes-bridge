@@ -1,0 +1,104 @@
+# Public example. Copy to ~/.codex-hermes-bridge/team.yaml and edit.
+version: 1
+
+hermes:
+  runtime: wsl
+  command: hermes
+  distro: Ubuntu-24.04
+  queryMode: auto
+  timeoutMs: 900000
+  defaultToolsets:
+    - hermes-cli
+  source: tool
+
+providers:
+  alibaba:
+    hermesProvider: alibaba
+    description: Qwen models through Alibaba Model Studio
+  deepseek:
+    hermesProvider: deepseek
+    description: DeepSeek models through the official DeepSeek API
+
+models:
+  qwen-flash:
+    provider: alibaba
+    model: qwen3.8-flash
+    enabled: true
+    costClass: unknown
+    tags:
+      - coding
+      - fast
+      - simple-task
+  deepseek-flash:
+    provider: deepseek
+    model: deepseek-v4-flash
+    enabled: true
+    costClass: unknown
+    tags:
+      - coding
+      - agent
+
+workers:
+  quick:
+    profile: default
+    model: qwen-flash
+    role: simple-implementation
+    description: Preferred worker for simple, bounded coding tasks
+    capabilities:
+      - repository-read
+      - code-write
+      - test
+      - fast
+      - simple-task
+    toolsets:
+      - hermes-cli
+    sideEffectPolicy: local_files_allowed
+    timeoutMs: 900000
+  coder:
+    profile: default
+    model: deepseek-flash
+    role: implementation
+    description: Worker for broader or more complex coding tasks
+    capabilities:
+      - repository-read
+      - code-write
+      - test
+      - debug
+    toolsets:
+      - hermes-cli
+    sideEffectPolicy: local_files_allowed
+    timeoutMs: 900000
+
+teams:
+  default:
+    description: Default software engineering team
+    roles:
+      quick: quick
+      coder: coder
+    maxParallel: 3
+
+routing:
+  defaultTeam: default
+  defaultWorker: quick
+  allowPaidFallback: false
+  allowModelOverride: true
+
+execution:
+  defaultWorkspaceMode: shared
+  parallelWriteWorkspaceMode: worktree
+  failFast: false
+  maxParallel: 3
+  collectGitEvidence: true
+  allowWorkerCommits: false
+
+safety:
+  defaultSideEffectPolicy: local_files_allowed
+  allowedWorkspaceRoots: []
+  acceptHooks: false
+
+panel:
+  enabled: false
+  maxWorkers: 4
+
+kanban:
+  enabled: false

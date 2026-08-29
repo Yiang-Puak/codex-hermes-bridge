@@ -1,0 +1,50 @@
+{
+  "name": "codex-hermes-bridge",
+  "version": "0.4.0",
+  "description": "Local MCP execution and review bridge for Codex-managed Hermes teams.",
+  "type": "module",
+  "bin": {
+    "codex-hermes-bridge": "./dist/index.js"
+  },
+  "files": [
+    "dist",
+    "examples",
+    "skills",
+    "docs",
+    ".codex-plugin",
+    "README.md",
+    "LICENSE",
+    "AGENTS.md"
+  ],
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "postbuild": "node -e \"require('node:fs').chmodSync('dist/index.js', 0o755)\"",
+    "prepare": "npm run build",
+    "dev": "tsx src/index.ts",
+    "test": "vitest run",
+    "typecheck": "tsc -p tsconfig.json --noEmit"
+  },
+  "keywords": [
+    "codex",
+    "hermes-agent",
+    "mcp",
+    "agent-team",
+    "execution",
+    "review"
+  ],
+  "license": "MIT",
+  "engines": {
+    "node": ">=20"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.29.0",
+    "yaml": "^2.9.0",
+    "zod": "^4.4.3"
+  },
+  "devDependencies": {
+    "@types/node": "^22.19.3",
+    "tsx": "^4.21.0",
+    "typescript": "^5.9.3",
+    "vitest": "^4.0.14"
+  }
+}

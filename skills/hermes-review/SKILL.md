@@ -1,11 +1,15 @@
 ---
 name: hermes-review
-description: Use automatically when the user or project requests Hermes, Codex-Hermes review, independent paper review, post-change code review, citation/figure audits, or multiple Hermes opinions. Runs one immutable bundle through isolated reviewers and leaves semantic synthesis to Codex.
+description: Use only when the user explicitly requests an independent Hermes paper/code review, citation/figure audit, or review panel. Runs one immutable bundle through isolated reviewers and leaves semantic synthesis to Codex.
 ---
 
-# Hermes Review
+# Hermes Review (Legacy Compatibility)
 
 Use project `tools/hermes-review.ps1` when present; otherwise use this Skill's `scripts/hermes-review.ps1`. Run deterministic tests/builds first. Use `-NoRun` only for plumbing checks.
+
+This is the legacy independent-review pipeline, not the normal Codex-managed
+execution path. For implementation/delegation tasks use the `hermes-team` Skill
+and MCP worker tools instead.
 
 Choose one preset:
 

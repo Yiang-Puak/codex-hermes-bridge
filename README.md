@@ -1,123 +1,130 @@
 # codex-hermes-bridge
 
-一个保持轻量的本地 **Codex → Hermes 独立评审桥**。
+本项目是一个本地、stdio-only 的 Codex/Sol → Hermes Worker/Team 执行桥。
 
-Codex 负责修改、确定性验证和最终判断；Hermes 让不同模型基于同一个不可变材料快照独立给意见。wrapper 不做语义共识、不保存数据库、不运行 daemon，也不把模型意见自动当成事实。
+Codex/Sol 负责理解需求、规划、拆解任务、选择 worker 和最终验收；MCP bridge 负责确定性路由、runtime 适配、并发、工作区隔离和 Git 证据；Hermes 负责实际执行。Provider、model、profile 和 WSL distro 都来自配置，仓库不保存 API key，也不启动 daemon、数据库或 HTTP 服务。
 
-## 五个 Preset
+默认工作流是 `hermes-team` 执行 Skill。原有 `hermes-review` immutable-bundle 审查流水线继续保留，但只有用户明确要求独立审查时才使用。
 
-| Preset | Reviewer | 用途 |
-| --- | --- | --- |
-| `delegate` | Qwen Flash | 格式、清单、错误摘要等窄范围检查 |
-| `paper` | DeepSeek Pro、DeepSeek Flash、千问 Plus | 三模型分别完整审查同一论文材料 |
-| `paper-deep` | 标准三模型 + GLM + Qwen Flash | 投稿前或争议较大的完整审查 |
-| `code` | GLM | 一位强模型全局代码审查 |
-| `code-deep` | GLM 全局 + 千问 Plus 安全 + DeepSeek Pro 正确性/测试 | 高风险代码改动 |
+## 工作流
 
-论文 reviewer 不分章节、不共享其他 reviewer 的身份或输出。代码专项 reviewer 仍看到完整 bundle，只是对指定领域投入更多注意力；同时检查一次性抽象、重复实现、推测性配置和无关重构是否造成不必要复杂度。
-
-## 材料合同
-
-wrapper 只生成一种不可变 bundle：
-
-- 显式 `-Path`：使用这些文件的内容。
-- code preset 未传 `-Path`：自动收集 staged、unstaged、deleted diff 和 untracked 文件。
-- 文本内容和图片哈希进入同一个 snapshot。
-- 二进制、超大文件、读取失败或未审查图片会让 coverage 变成 `incomplete`。
-- 每个 reviewer 收到同一个 snapshot ID 和 bundle 路径。
-
-运行前会显示材料字符数、近似 token/reviewer、coverage、模型和 provider。这个估算包含 bundle 内容，但仍不是 provider 的计费 tokenizer。
-
-## 使用
-
-论文标准面板：
-
-```powershell
-powershell -NoProfile -ExecutionPolicy Bypass -File ".\tools\hermes-review.ps1" `
-  -Preset paper -Concurrency 3 -ProjectRoot "D:\path\to\paper" `
-  -Path "D:\path\to\paper\main.tex","D:\path\to\paper\supplement.tex" `
-  -Prompt "完整审查逻辑、数字、claim、证据边界和可推广性。"
+```text
+User -> Codex/Sol plan -> MCP bridge route -> Hermes profile/model
+     -> worker edits/tests -> structured Git evidence -> Codex/Sol acceptance
 ```
 
-代码高风险面板；不传 `-Path` 时审查全部 Git 变更，包括 untracked：
+并行写任务默认使用独立 Git worktree；bridge 不自动 merge、不回滚用户改动、不替 Codex 判断代码是否正确。
+
+## 快速开始
+
+前置条件：Node.js 20+、已安装并可从目标 runtime 调用的 Hermes CLI，以及至少一个已经配置好的 Hermes profile/provider credential。
+
+在仓库根目录执行：
 
 ```powershell
-powershell -NoProfile -ExecutionPolicy Bypass -File ".\tools\hermes-review.ps1" `
-  -Preset code-deep -ProjectRoot "D:\path\to\project" `
-  -Prompt "重点检查认证、并发和回归风险。"
+npm ci
+npm run build
+node ./dist/index.js init-config
+node ./dist/index.js doctor
 ```
 
-窄范围委派：
+`init-config` 默认生成 `%USERPROFILE%/.codex-hermes-bridge/team.yaml`。也可以通过 `CODEX_HERMES_BRIDGE_CONFIG` 指定配置文件。
+
+把 [examples/team.yaml](examples/team.yaml) 复制到用户配置目录后，按本机的 profile、provider、model 和 runtime 修改。公开示例将未指定模型的请求固定路由到 `quick`（阿里百炼 `qwen3.8-flash`）；只有用户明确指定其他 worker、model 或 provider 时才切换到其他路由，例如 `coder`（DeepSeek 官方 API `deepseek-v4-flash`）。
+
+在 Codex 配置中添加 MCP server：
+
+```toml
+[mcp_servers.hermes]
+command = "node"
+args = ["C:/path/to/codex-hermes-bridge/dist/index.js"]
+
+[mcp_servers.hermes.env]
+CODEX_HERMES_BRIDGE_CONFIG = "C:/Users/you/.codex-hermes-bridge/team.yaml"
+```
+
+也可以执行 `npm link` 后使用包名；完整模板见 [examples/codex-config.example.toml](examples/codex-config.example.toml)。重启 Codex 后，bridge 通过 stdio 提供 MCP tools。
+
+## MCP tools
+
+- `hermes_bridge_health`：检查 runtime、Hermes 版本和 registry 计数，不调用模型。
+- `hermes_team_list`：列出公开的 Team/Worker/Model/Provider metadata 和 Hermes profiles，不返回 secret。
+- `hermes_team_route`：按 team、role、worker、capability 和 cost preference 做确定性路由。
+- `hermes_worker_run`：执行一个完整 Task Contract，并返回真实 Git 前后状态、changed files、diff stat、exit code、stderr 和 worker 报告。
+- `hermes_team_run`：并发执行 Codex 已经拆好的独立任务；并发上限受全局、Team 和本次请求三层限制。
+- `hermes_panel_run`：可选的只读/advice panel，必须在配置中启用；bridge 只返回独立结果，不做语义综合。
+
+复杂任务可以先用 `hermes_team_run` 并行执行多个 `quick` worker，再由 Codex 根据各自的 worktree、分支和 evidence 生成第二份整合合同，调用一个 `hermes_worker_run` 完成合并、补全和测试。bridge 不自动猜测“谁负责整合”，也不自动 merge，整合责任仍由 Codex/Sol 控制。
+
+Kanban durable-task tools 当前未实现，也不会在关闭时注册。独立 review 仍走兼容的 `hermes-review` Skill，不会被普通 worker 调用隐式触发。
+
+## Task Contract
+
+每个执行任务至少包含 `id`、`objective`、`context`、`requirements`、`scope`、`acceptanceCriteria` 和 `validation`。scope 使用 `allowedPaths` / `forbiddenPaths`；可选字段包括 `dependsOn`、`ownership`、`knownRisks`、`constraints` 和 `expectedOutput`。
+
+bridge 会将合同转换成包含 `ROLE`、`OBJECTIVE`、`CONTEXT`、`CURRENT STATE`、`SCOPE / OWNERSHIP`、`REQUIREMENTS`、`CONSTRAINTS`、`EXECUTION PROCEDURE`、`ACCEPTANCE CRITERIA`、`VALIDATION` 和 `FINAL RESPONSE CONTRACT` 的 worker prompt。Sol 仍必须检查实际 diff 和测试结果，不能只相信 Hermes 的文字总结。
+
+## Registry 与模型替换
+
+配置关系是 `Team role -> Worker -> profile + modelRef -> Provider + model`。显式 `worker` 优先于 role；没有显式 worker/role 时使用 `routing.defaultWorker`；显式 `modelOverride` 只有在 `routing.allowModelOverride` 开启时生效。model 缺失、disabled、provider 缺失或 route 不可用都会返回结构化失败；默认不会静默切换到付费模型或其他 provider。
+
+当前示例中 `routing.defaultWorker: quick`，所以未指定路由时使用 `provider: alibaba` 的 `qwen3.8-flash`。调用时只有明确传 `worker: coder`、对应 `role` 或 `modelOverride` 才切换到 `provider: deepseek` 的 `deepseek-v4-flash`；bridge 不根据自然语言猜任务复杂度，也不会在两者之间静默 fallback。
+
+Provider credential 由 Hermes 自己管理或从环境读取。不要把 `sk-...`、`DASHSCOPE_API_KEY`、`DEEPSEEK_API_KEY` 或任何其他 secret 写入本仓库、Task Contract、MCP 参数或 worker 输出。
+
+## Hermes CLI 兼容性
+
+`hermes.queryMode` 默认是 `auto`。bridge 会检查 `hermes chat --help`：当前 Hermes v0.13.0 如果没有 `--query-file`，使用 argv `--query`；支持它的版本使用 `--query-file -`，通过 stdin 传递完整 prompt。两条路径都不依赖自定义 profile alias，也不把 task body 拼进 shell command。
+
+因此，不需要仅因为 `--query-file` 而立即升级 Hermes。若要使用新 CLI 的其他功能，再单独升级并重新运行 `doctor`、单元测试和一次 disposable smoke。
+
+## Runtime 与安全边界
+
+- `direct` runtime 直接启动配置中的 Hermes command；`wsl` runtime 使用配置中的 distro、cwd 和 command。
+- child process 使用 argv 数组，不经过 shell；超时会返回 `timed_out`。
+- `safety.allowedWorkspaceRoots` 可限制 bridge 接受的 workspace 根目录。
+- `acceptHooks` 和 `allowWorkerCommits` 默认关闭；外部副作用必须由配置和任务合同明确允许。
+- Git evidence 是确定性证据，不是 sandbox；它同时检查 worker 运行期间留下的工作区变更和允许提交时产生的 commit diff。bridge 不会自动删除、回滚或覆盖用户已有修改。
+
+## 旧 PowerShell 入口
+
+`tools/hermes-exec.ps1` 及其 canonical script 现在只是 deprecated compatibility entry，不是默认入口，也不再绑定某个模型。若暂时使用它，必须显式传入 `-WslDistro`、`-Profile`、`-Provider` 和 `-Model`；长远使用请迁移到 `hermes_worker_run`。
 
 ```powershell
-powershell -NoProfile -ExecutionPolicy Bypass -File ".\tools\hermes-review.ps1" `
-  -Preset delegate -ProjectRoot "D:\path\to\project" `
-  -Path "D:\path\to\project\README.md" `
-  -Prompt "只检查安装步骤是否自洽。"
+powershell -NoProfile -ExecutionPolicy Bypass -File "./tools/hermes-exec.ps1" `
+  -ProjectRoot "D:/path/to/project" `
+  -TaskFile "D:/path/to/task.md" `
+  -WslDistro "Ubuntu-24.04" `
+  -Profile "default" -Provider "alibaba" `
+  -Model "qwen3.8-flash" -Toolsets hermes-cli
 ```
 
-只检查路由、快照和 runner，不调用模型：
+旧 `hermes-review` wrapper 仍保持兼容，且只有显式审查请求才使用：
 
 ```powershell
-... -NoRun
+powershell -NoProfile -ExecutionPolicy Bypass -File "./tools/hermes-review.ps1" `
+  -Preset code -ProjectRoot "D:/path/to/project" `
+  -Prompt "明确要求的独立代码审查。" -NoRun
 ```
 
-常用参数：
+immutable bundle、staged/unstaged/deleted/untracked 收集、敏感内容拦截和 reviewer 隔离都继续保留。
 
-- `-Models`：显式覆盖 preset 模型顺序。
-- `-MaxFindings`：每位 reviewer 的发现上限。
-- `-TimeoutSec`：每位 reviewer 的硬超时。
-- `-Concurrency`：并行上限；设为 `1` 即串行。论文 preset 未显式指定时自动使用 `3`，使三位独立审稿人同时启动；显式值仍优先。
-- `-OutputPath` 或 `-KeepReport`：持久保存唯一的 JSON 报告。
-- `-KeepTemp`：仅用于调试 bundle、prompt 和 runner。
-- `-AllowSensitiveInput`：用户确认外发范围后绕过高置信度内容检查。
+## Plugin / Skill
 
-## 输出与 Sol
-
-wrapper 只维护一种 JSON 结果（schema `2.1`）：`runStatus`、snapshot、文件状态、reviewer 状态、findings、residual risks 和 transport 诊断。只有 `runStatus=completed` 且所有 reviewer 都是 `completed` 时才是有效结论；默认会把 JSON 输出到终端，然后删除临时报告。
-
-WSL 的启动诊断与 reviewer 结果分开处理：WSL 退出码为 `0` 时，启动 stderr 仅记录为非致命诊断，不能单独判定审查失败。若 Windows 使用 `localhost` 代理而 WSL 为 NAT 模式，可在 `%UserProfile%\.wslconfig` 设置 `autoProxy=false`，或在确实需要该本地代理时改用 mirrored networking。
-
-从 Codex 或其他会话型终端调用时，必须持续轮询同一终端，直至出现 `Reviewer states:` 和 JSON 结果；wrapper 会输出 reviewer 完成进度和心跳。`Hermes review prepared`、`Running Hermes...` 以及 WSL 非致命诊断都只是进度，不是完成或失败信号。
-
-wrapper 故意不做自动语义共识。所有 reviewer 独立完成后，由 Sol/Codex：
-
-1. 按语义合并相同问题。
-2. 回到 bundle 核验证据。
-3. 区分共识、分歧和模型独有意见。
-4. 拒绝无依据计算和过强结论。
-
-Sol/Terra/Luna 的选择属于 Codex 编排层，不是 wrapper 的模型切换参数。
-
-## 图像与敏感材料
-
-默认 `-Vision off`，图片不会外发且 coverage 为 `incomplete`。
-
-允许共享视觉 sidecar：
-
-```powershell
--Vision shared -AllowImageUpload
-```
-
-视觉证据由一个 sidecar 生成并共享给文本 reviewer，因此文本判断仍独立，但视觉证据不是多模型独立生成。
-
-内容扫描只拦截高置信度 private key、Bearer token、API key 和带密码连接串；它不是完整 DLP。真实论文、日志或私有代码外发前仍需人工确认。
-
-## 安装
-
-Skill 的唯一源码就在 `skills/hermes-review/`。可直接复制：
-
-```powershell
-$dest = Join-Path $env:USERPROFILE ".codex\skills\hermes-review"
-Copy-Item -Path ".\skills\hermes-review\*" -Destination $dest -Recurse -Force
-```
-
-仓库同时包含 `.codex-plugin/plugin.json`。安装 plugin 时复制整个 `skills/hermes-review/`，不需要构建或生成同步副本。
+- `skills/hermes-team/` 是默认执行 Skill：Sol 规划，Hermes 执行，Sol 验收。
+- `skills/hermes-review/` 是显式请求时使用的独立审查兼容 Skill。
+- `.codex-plugin/plugin.json` 提供 plugin manifest；复制 plugin 时保留两个 Skill 目录。
 
 ## 开发验证
 
 ```powershell
-powershell -NoProfile -ExecutionPolicy Bypass -File ".\tests\smoke-no-run.ps1"
+npm test -- --run
+npm run typecheck
+npm run build
+git diff --check
+powershell -NoProfile -ExecutionPolicy Bypass -File ./tests/smoke-no-run.ps1
 ```
 
-smoke 不消耗模型 token，验证论文顺序与隔离、强模型代码角色、Git untracked/deleted 收集、coverage、敏感内容拒绝和临时文件策略。
+最后一个 smoke 测试只验证旧 review pipeline，不调用模型；带 `CHB_REAL_PROFILE`、`CHB_REAL_PROVIDER` 和 `CHB_REAL_MODEL` 环境变量时，`tests/real-hermes-smoke.test.ts` 才会执行一次 disposable Git fixture 的真实 runtime smoke。
+
+参考源码研究与迁移决策记录在 [docs/reference-analysis.md](docs/reference-analysis.md)，Phase 0 基线记录在 [docs/baseline-freeze.md](docs/baseline-freeze.md)。

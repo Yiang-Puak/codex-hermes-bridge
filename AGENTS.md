@@ -1,25 +1,50 @@
 # Codex Hermes Bridge Development Rules
 
-Use Chinese for user-facing discussion in this workspace. Keep repository files public-friendly unless the user explicitly asks for private notes.
+Use Chinese for user-facing discussion in this workspace. Keep repository files
+public-friendly unless the user explicitly asks for private notes.
 
 ## Scope
 
-This project packages a minimal local Codex -> Hermes workflow. `skills/hermes-review/` is the only implementation source; `tools/hermes-review.ps1` is a compatibility shim.
+This project is a local, stdio-only MCP bridge in which Codex/Sol plans,
+selects, and verifies work while Hermes profiles execute bounded Worker/Team
+tasks. The TypeScript implementation under `src/` is the v2 execution core.
+`skills/hermes-team/` teaches the execution workflow. The existing
+`skills/hermes-review/` pipeline remains a compatibility feature and is not the
+default execution path.
 
 ## Rules
 
-1. Do not commit API keys, provider config, real manuscript content, private paths, or local logs.
-2. Keep the top-level wrapper at 10 lines or fewer and never duplicate the canonical implementation.
-3. Use `tests/smoke-no-run.ps1` after wrapper, Skill, config, or template changes.
-4. Keep the Skill concise. Put the only full human-facing manual in `README.md`.
-5. Keep reports temporary unless `-KeepReport` or `-OutputPath` is explicit.
-6. Maintain one profile config, one result schema, and one JSON output format.
-7. Keep the canonical script under 900 lines and smoke tests under 250 lines.
-8. Do not add MCP, daemon, database, queue, Web UI, generated copies, or model-based synthesis inside the wrapper.
+1. Never commit API keys, provider credentials, private memory, local logs, or
+   private absolute paths.
+2. Do not add a daemon, database, queue, HTTP server, background poller, or
+   model-based semantic synthesis to the bridge core.
+3. Keep provider/model/distro values configuration-driven; never hard-code a
+   provider, model, profile alias, or distro in execution code.
+4. Keep the WSL distro configuration-driven and invoke the configured Hermes
+   command directly.
+5. Do not silently fall back to a paid model or another provider. Return a
+   structured routing/model failure for Codex to decide.
+6. Do not automatically accept hooks or resume a user's latest Hermes session.
+7. Sol plans and decomposes; Hermes executes; Sol checks actual Git/test
+   evidence and performs final acceptance.
+8. Parallel write tasks use isolated worktrees by default. Never auto-merge or
+   discard user changes.
+9. Preserve the immutable bundle, reviewer independence, staged/unstaged/
+   deleted/untracked collection, sensitive guard, strict JSON, and NoRun smoke
+   behavior of `hermes-review`.
+10. Keep top-level PowerShell wrappers as thin shims (10 lines or fewer) and do
+    not duplicate canonical implementations.
 
-## Minimal-change guardrails
+## Incremental implementation
 
-- State the root cause and assumptions before changing code; do not silently choose among ambiguous interpretations.
-- Prefer an existing file, configuration switch, or built-in capability over a new file or abstraction.
-- Do not add speculative flexibility, duplicate implementations, or adjacent cleanup; every changed line must trace to the request.
-- Define a testable success condition and run it before declaring the change complete.
+- Complete one PRD phase at a time and record its validation before proceeding.
+- Read the nearest `AGENTS.md`, relevant README/config/entrypoint, and all
+  callers before changing a shared function.
+- Prefer the smallest correct implementation and existing dependencies.
+- Add a focused test for nontrivial file, process, path, registry, or
+  persistence behavior.
+- Run `npm test`, `npm run typecheck`, `npm run build`, and the legacy
+  `tests/smoke-no-run.ps1` at the relevant phase boundary.
+- If the installed Hermes CLI differs from the PRD, inspect
+  `hermes --help` and `hermes chat --help` and adapt the runtime/tests to the
+  observed flags; do not rely on memory.

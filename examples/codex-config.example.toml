@@ -1,0 +1,10 @@
+# Add this to Codex config after installing/building the bridge.
+# Replace the paths with absolute paths on the local machine.
+
+[mcp_servers.hermes]
+command = "node"
+args = ["C:/path/to/codex-hermes-bridge/dist/index.js"]
+
+# Optional environment override:
+# [mcp_servers.hermes.env]
+# CODEX_HERMES_BRIDGE_CONFIG = "C:/Users/you/.codex-hermes-bridge/team.yaml"
