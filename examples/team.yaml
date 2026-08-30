@@ -54,6 +54,7 @@ workers:
       - hermes-cli
     sideEffectPolicy: local_files_allowed
     timeoutMs: 900000
+    maxTurns: 30
   coder:
     profile: default
     model: deepseek-flash
@@ -68,6 +69,7 @@ workers:
       - hermes-cli
     sideEffectPolicy: local_files_allowed
     timeoutMs: 900000
+    maxTurns: 50
 
 teams:
   default:

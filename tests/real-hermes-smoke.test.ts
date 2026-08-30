@@ -58,7 +58,8 @@ describe.skipIf(!enabled)("real Hermes smoke", () => {
               capabilities: ["repository-read", "code-write", "test"],
               toolsets: ["hermes-cli"],
               sideEffectPolicy: "local_files_allowed",
-              timeoutMs: 300_000
+              timeoutMs: 300_000,
+              maxTurns: 12
             }
           },
           teams: { default: { roles: { coder: "smoke" }, maxParallel: 1 } },
@@ -86,6 +87,8 @@ describe.skipIf(!enabled)("real Hermes smoke", () => {
 
         expect(result.status, JSON.stringify({ status: result.status, errors: result.errors })).toBe("completed");
         expect(result.evidence.changedFiles).toContain("target.txt");
+        expect(result.runtime.sessionId).toBeTruthy();
+        expect(result.usage?.apiCalls).toBeGreaterThan(0);
         expect(await readFile(join(root, "target.txt"), "utf8")).toContain("after");
       } finally {
         await rm(root, { recursive: true, force: true });

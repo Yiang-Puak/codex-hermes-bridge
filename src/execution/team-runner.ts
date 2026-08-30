@@ -30,8 +30,22 @@ export type TeamRunResult = {
   mode: "parallel";
   maxParallel: number;
   results: WorkerRunResult[];
+  usage: TeamUsage;
   warnings: string[];
   errors: string[];
+};
+
+export type TeamUsage = {
+  measuredWorkers: number;
+  totalWorkers: number;
+  inputTokens: number;
+  cacheReadTokens: number;
+  cacheWriteTokens: number;
+  outputTokens: number;
+  reasoningTokens: number;
+  totalTokens: number;
+  apiCalls: number;
+  toolCalls: number;
 };
 
 export async function runTeam(
@@ -53,6 +67,7 @@ export async function runTeam(
       mode: request.mode,
       maxParallel: 0,
       results: [],
+      usage: summarizeUsage([]),
       warnings: [],
       errors: [`Task at index ${invalidIdIndex} is missing a non-empty top-level id.`]
     };
@@ -67,6 +82,7 @@ export async function runTeam(
       mode: request.mode,
       maxParallel: 0,
       results: [],
+      usage: summarizeUsage([]),
       warnings: [],
       errors: [`Duplicate task IDs: ${[...new Set(duplicateIds)].join(", ")}`]
     };
@@ -105,9 +121,37 @@ export async function runTeam(
     mode: request.mode,
     maxParallel,
     results,
+    usage: summarizeUsage(results),
     warnings: [...new Set(warnings)],
     errors
   };
+}
+
+function summarizeUsage(results: WorkerRunResult[]): TeamUsage {
+  const usage = results.flatMap((result) => result.usage ? [result.usage] : []);
+  return usage.reduce<TeamUsage>((total, item) => ({
+    measuredWorkers: total.measuredWorkers + 1,
+    totalWorkers: results.length,
+    inputTokens: total.inputTokens + item.inputTokens,
+    cacheReadTokens: total.cacheReadTokens + item.cacheReadTokens,
+    cacheWriteTokens: total.cacheWriteTokens + item.cacheWriteTokens,
+    outputTokens: total.outputTokens + item.outputTokens,
+    reasoningTokens: total.reasoningTokens + item.reasoningTokens,
+    totalTokens: total.totalTokens + item.totalTokens,
+    apiCalls: total.apiCalls + item.apiCalls,
+    toolCalls: total.toolCalls + item.toolCalls
+  }), {
+    measuredWorkers: 0,
+    totalWorkers: results.length,
+    inputTokens: 0,
+    cacheReadTokens: 0,
+    cacheWriteTokens: 0,
+    outputTokens: 0,
+    reasoningTokens: 0,
+    totalTokens: 0,
+    apiCalls: 0,
+    toolCalls: 0
+  });
 }
 
 async function runTeamTask(
@@ -168,7 +212,8 @@ function failedWorkerResult(
     team,
     worker: task.worker ?? "unknown",
     routing: { profile: "", modelRef: null, provider: null, model: null, modelSource: "none" },
-    runtime: { kind: config.hermes.runtime, distro: config.hermes.distro ?? null, exitCode: null, timedOut: false },
+    runtime: { kind: config.hermes.runtime, distro: config.hermes.distro ?? null, exitCode: null, timedOut: false, sessionId: null },
+    usage: null,
     workspace: { mode: task.workspaceMode ?? "shared", cwd: task.cwd, gitRoot: null, headBefore: null, headAfter: null },
     evidence: { changedFiles: [], diffStat: "", statusBefore: [], statusAfter: [], outOfScopeChanges: [] },
     workerReport: { text: "" },

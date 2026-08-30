@@ -32,8 +32,22 @@ export const WorkerRunResultSchema = z.object({
     kind: RuntimeKindSchema,
     distro: z.string().nullable(),
     exitCode: z.number().int().nullable(),
-    timedOut: z.boolean()
+    timedOut: z.boolean(),
+    sessionId: z.string().nullable().default(null)
   }),
+  usage: z.object({
+    inputTokens: z.number().int().nonnegative(),
+    cacheReadTokens: z.number().int().nonnegative(),
+    cacheWriteTokens: z.number().int().nonnegative(),
+    outputTokens: z.number().int().nonnegative(),
+    reasoningTokens: z.number().int().nonnegative(),
+    totalTokens: z.number().int().nonnegative(),
+    apiCalls: z.number().int().nonnegative(),
+    toolCalls: z.number().int().nonnegative(),
+    estimatedCostUsd: z.number().nonnegative().nullable(),
+    actualCostUsd: z.number().nonnegative().nullable(),
+    costStatus: z.string().min(1)
+  }).nullable().default(null),
   workspace: z.object({
     mode: WorkspaceModeSchema,
     cwd: z.string().min(1),

@@ -54,7 +54,7 @@ CODEX_HERMES_BRIDGE_CONFIG = "C:/Users/you/.codex-hermes-bridge/team.yaml"
 - `hermes_team_run`：并发执行 Codex 已经拆好的独立任务；并发上限受全局、Team 和本次请求三层限制。
 - `hermes_panel_run`：可选的只读/advice panel，必须在配置中启用；bridge 只返回独立结果，不做语义综合。
 
-复杂任务可以先用 `hermes_team_run` 并行执行多个 `quick` worker，再由 Codex 根据各自的 worktree、分支和 evidence 生成第二份整合合同，调用一个 `hermes_worker_run` 完成合并、补全和测试。bridge 不自动猜测“谁负责整合”，也不自动 merge，整合责任仍由 Codex/Sol 控制。
+默认优先使用一个 `quick` worker。只有存在至少两个真正独立的 ownership scope，且并行能明显节约时间时，才使用 `hermes_team_run`。只有并行输出存在跨模块接口或行为需要语义整合时，才额外调用整合 worker；互不冲突的文件修改不应机械增加一次模型调用。bridge 不自动猜测“谁负责整合”，也不自动 merge，整合责任仍由 Codex/Sol 控制。
 
 Kanban durable-task tools 当前未实现，也不会在关闭时注册。独立 review 仍走兼容的 `hermes-review` Skill，不会被普通 worker 调用隐式触发。
 
@@ -82,9 +82,11 @@ Provider credential 由 Hermes 自己管理或从环境读取。不要把 `sk-..
 
 - `direct` runtime 直接启动配置中的 Hermes command；`wsl` runtime 使用配置中的 distro、cwd 和 command。
 - child process 使用 argv 数组，不经过 shell；超时会返回 `timed_out`。
+- worker 可配置 `maxTurns`，bridge 会传递 Hermes `--max-turns`，用于限制异常长会话。
+- Hermes quiet-mode 返回 session ID 时，bridge 通过公开的 `sessions export` 接口采集 token、API call 和成本状态，team result 会汇总各 worker 用量；不读取 Hermes 私有数据库，采集失败也不会改变执行结果。
 - `safety.allowedWorkspaceRoots` 可限制 bridge 接受的 workspace 根目录。
 - `acceptHooks` 和 `allowWorkerCommits` 默认关闭；外部副作用必须由配置和任务合同明确允许。
-- Git evidence 是确定性证据，不是 sandbox；它同时检查 worker 运行期间留下的工作区变更和允许提交时产生的 commit diff。bridge 不会自动删除、回滚或覆盖用户已有修改。
+- Git evidence 是确定性证据，不是 sandbox；它同时检查 worker 运行期间留下的工作区变更和允许提交时产生的 commit diff。并行 worktree 位于系统临时目录，不污染目标仓库；bridge 不会自动删除、回滚或覆盖用户已有修改。
 
 ## 旧 PowerShell 入口
 

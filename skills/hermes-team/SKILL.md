@@ -42,12 +42,19 @@ validation
 
 ## Parallel team
 
-Sol decomposes only independent tasks. Call `hermes_team_run` with
+Default to one `quick` worker. Use a parallel team only when there are at least
+two genuinely independent ownership scopes and parallelism is likely to save
+meaningful wall time. Sol decomposes only independent tasks. Call `hermes_team_run` with
 `mode=parallel`, unique IDs, explicit workers, ownership/scope, acceptance
 criteria, and validation. The bridge bounds concurrency, keeps all results with
 `Promise.allSettled`-style behavior, and uses a separate worktree for
 write-capable workers by default. It never auto-merges; Sol decides how to
 integrate branches.
+
+Add an integration worker only when the parallel outputs have cross-module
+interfaces or behavior that require semantic reconciliation. Disjoint file
+changes do not automatically require another model call. Give an integration
+worker worktree paths and concise Git evidence, not full worker transcripts.
 
 ## Routing and model policy
 

@@ -9,6 +9,27 @@ export type HermesInvocation = {
   cwd?: string | undefined;
   prompt?: string | undefined;
   timeoutMs: number;
+  maxTurns?: number | undefined;
+};
+
+export type HermesSessionUsage = {
+  inputTokens: number;
+  cacheReadTokens: number;
+  cacheWriteTokens: number;
+  outputTokens: number;
+  reasoningTokens: number;
+  totalTokens: number;
+  apiCalls: number;
+  toolCalls: number;
+  estimatedCostUsd: number | null;
+  actualCostUsd: number | null;
+  costStatus: string;
+};
+
+export type HermesRunResult = RuntimeResult & {
+  sessionId: string | null;
+  usage: HermesSessionUsage | null;
+  usageWarning?: string | undefined;
 };
 
 type ProfileListRow = {
@@ -56,15 +77,38 @@ export class HermesCliProvider {
     return parseProfileList(result.stdout);
   }
 
-  async run(invocation: HermesInvocation): Promise<RuntimeResult> {
+  async run(invocation: HermesInvocation): Promise<HermesRunResult> {
     const queryMode = await this.resolveQueryMode();
     const built = buildHermesInvocation(invocation, this.config.hermes.source, queryMode);
-    return this.runtime.run({
+    const result = await this.runtime.run({
       args: built.args,
       ...(built.input !== undefined ? { input: built.input } : {}),
       cwd: invocation.cwd,
       timeoutMs: invocation.timeoutMs
     });
+    const sessionId = parseSessionId(result.stderr);
+    if (!sessionId) return { ...result, sessionId: null, usage: null };
+
+    try {
+      const exported = await this.runtime.run({
+        args: ["sessions", "export", "--session-id", sessionId, "-"],
+        timeoutMs: 30_000
+      });
+      const usage = exported.exitCode === 0 ? parseSessionUsage(exported.stdout) : null;
+      return {
+        ...result,
+        sessionId,
+        usage,
+        ...(usage ? {} : { usageWarning: `Hermes usage is unavailable for session '${sessionId}'.` })
+      };
+    } catch {
+      return {
+        ...result,
+        sessionId,
+        usage: null,
+        usageWarning: `Hermes usage is unavailable for session '${sessionId}'.`
+      };
+    }
   }
 
   getRuntime(): HermesRuntime {
@@ -113,11 +157,50 @@ export function buildHermesInvocation(
   if (invocation.provider) args.push("--provider", invocation.provider);
   if (invocation.model) args.push("--model", invocation.model);
   if (invocation.toolsets.length > 0) args.push("--toolsets", invocation.toolsets.join(","));
+  if (invocation.maxTurns !== undefined) args.push("--max-turns", String(invocation.maxTurns));
   args.push("--source", source, "--quiet");
   return {
     args,
     ...(queryMode === "query-file" && invocation.prompt !== undefined ? { input: invocation.prompt } : {})
   };
+}
+
+export function parseSessionId(output: string): string | null {
+  return output.match(/^session_id:\s*(\S+)\s*$/mi)?.[1] ?? null;
+}
+
+export function parseSessionUsage(output: string): HermesSessionUsage | null {
+  try {
+    const data = JSON.parse(output.trim()) as Record<string, unknown>;
+    const inputTokens = nonNegativeInteger(data.input_tokens);
+    const outputTokens = nonNegativeInteger(data.output_tokens);
+    if (inputTokens === null || outputTokens === null) return null;
+    const cacheReadTokens = nonNegativeInteger(data.cache_read_tokens) ?? 0;
+    const cacheWriteTokens = nonNegativeInteger(data.cache_write_tokens) ?? 0;
+    return {
+      inputTokens,
+      cacheReadTokens,
+      cacheWriteTokens,
+      outputTokens,
+      reasoningTokens: nonNegativeInteger(data.reasoning_tokens) ?? 0,
+      totalTokens: inputTokens + cacheReadTokens + cacheWriteTokens + outputTokens,
+      apiCalls: nonNegativeInteger(data.api_call_count) ?? 0,
+      toolCalls: nonNegativeInteger(data.tool_call_count) ?? 0,
+      estimatedCostUsd: nonNegativeNumber(data.estimated_cost_usd),
+      actualCostUsd: nonNegativeNumber(data.actual_cost_usd),
+      costStatus: typeof data.cost_status === "string" ? data.cost_status : "unknown"
+    };
+  } catch {
+    return null;
+  }
+}
+
+function nonNegativeNumber(value: unknown): number | null {
+  return typeof value === "number" && Number.isFinite(value) && value >= 0 ? value : null;
+}
+
+function nonNegativeInteger(value: unknown): number | null {
+  return typeof value === "number" && Number.isInteger(value) && value >= 0 ? value : null;
 }
 
 export function parseProfileList(output: string): ProfileListRow[] {

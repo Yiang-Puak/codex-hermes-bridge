@@ -26,6 +26,7 @@ workers:
   coder:
     profile: executor
     model: worker-model
+    maxTurns: 30
     capabilities: [code-write]
 teams:
   default:
@@ -34,6 +35,7 @@ teams:
 `);
 
     expect(config.workers.coder?.profile).toBe("executor");
+    expect(config.workers.coder?.maxTurns).toBe(30);
     expect(config.models["worker-model"]?.provider).toBe("local");
     expect(config.teams.default?.roles.coder).toBe("coder");
   });

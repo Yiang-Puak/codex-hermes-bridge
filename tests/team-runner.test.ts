@@ -1,5 +1,5 @@
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
-import { join } from "node:path";
+import { join, relative } from "node:path";
 import { tmpdir } from "node:os";
 import { describe, expect, it } from "vitest";
 import { runCommand } from "../src/command.js";
@@ -25,6 +25,17 @@ class ParallelFakeRuntime implements HermesRuntime {
         args: command.args
       };
     }
+    if (command.args[0] === "sessions") {
+      return {
+        stdout: JSON.stringify({ input_tokens: 10, output_tokens: 5, api_call_count: 2, tool_call_count: 1 }),
+        stderr: "",
+        exitCode: 0,
+        timedOut: false,
+        runtime: "direct",
+        command: "fake-hermes",
+        args: command.args
+      };
+    }
     this.active += 1;
     this.maximum = Math.max(this.maximum, this.active);
     await new Promise((resolve) => setTimeout(resolve, 60));
@@ -35,7 +46,7 @@ class ParallelFakeRuntime implements HermesRuntime {
     this.active -= 1;
     return {
       stdout: profile === "fail" ? "" : `completed ${profile}`,
-      stderr: profile === "fail" ? "fake failure" : "",
+      stderr: `${profile === "fail" ? "fake failure\n" : ""}session_id: ${profile}`,
       exitCode: profile === "fail" ? 1 : 0,
       timedOut: false,
       runtime: "direct",
@@ -57,7 +68,6 @@ const task = (id: string) => ({
 
 async function createFixture(): Promise<string> {
   const root = await mkdtemp(join(tmpdir(), "chb-team-"));
-  await writeFile(join(root, ".gitignore"), ".worktrees/\n", "utf8");
   await writeFile(join(root, "README.md"), "fixture\n", "utf8");
   for (const args of [
     ["init", "-q"],
@@ -107,8 +117,10 @@ describe("runTeam", () => {
       expect(result.status).toBe("partial");
       expect(result.maxParallel).toBe(2);
       expect(result.results.map((item) => item.status)).toEqual(["completed", "failed", "completed"]);
+      expect(result.usage).toMatchObject({ measuredWorkers: 3, totalWorkers: 3, totalTokens: 45, apiCalls: 6 });
       expect(runtime.maximum).toBeLessThanOrEqual(2);
       expect(new Set(worktrees).size).toBe(3);
+      expect(worktrees.every((worktree) => relative(root, worktree).startsWith(".."))).toBe(true);
       expect(result.results.every((item) => item.workspace.mode === "worktree")).toBe(true);
       expect(result.results.every((item) => item.evidence.changedFiles.includes("result.txt") || item.status === "failed")).toBe(true);
 

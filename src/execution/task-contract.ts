@@ -78,10 +78,10 @@ export function buildWorkerPrompt(
       "Determine the smallest complete change.",
       "Implement it.",
       "Add or update tests where appropriate.",
-      "Run targeted validation.",
-      "Debug failures caused by the change.",
-      "Re-run validation.",
-      "Inspect the resulting diff."
+      "Run the listed validation once; debug and rerun only checks that fail because of the change.",
+      "Use one simple command per invocation. Avoid unrelated cleanup, recursive deletion, and line-ending rewrites.",
+      "Do not create temporary test scripts unless the existing test system cannot verify a required behavior.",
+      "Inspect the resulting diff once before reporting."
     ]),
     "",
     "ACCEPTANCE CRITERIA",
@@ -91,11 +91,9 @@ export function buildWorkerPrompt(
     ...numberedOrNone(task.validation),
     "",
     "FINAL RESPONSE CONTRACT",
-    "Return structured evidence only:",
+    "Return at most 1200 characters of structured evidence:",
     "- files changed",
-    "- implementation summary",
-    "- commands run",
-    "- pass/fail result",
+    "- validation commands and pass/fail result",
     "- blockers",
     "- residual risk",
     ...(task.expectedOutput ? ["", "EXPECTED OUTPUT", task.expectedOutput] : [])

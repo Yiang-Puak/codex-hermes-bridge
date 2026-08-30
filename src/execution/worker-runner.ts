@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { existsSync, statSync } from "node:fs";
 import { isAbsolute, relative, resolve } from "node:path";
-import { HermesCliProvider } from "../providers/hermes-cli.js";
+import { HermesCliProvider, type HermesRunResult } from "../providers/hermes-cli.js";
 import { resolveRoute, ResolverError, type RouteRequest } from "../resolver.js";
 import type { BridgeConfig, WorkspaceMode } from "../types.js";
 import { compareEvidence, captureGitEvidence, type GitEvidence } from "./evidence.js";
@@ -67,7 +67,8 @@ export async function runWorker(
         toolsets: workerToolsets(config, route.worker),
         cwd: request.cwd,
         prompt,
-        timeoutMs: request.timeoutMs ?? config.workers[route.worker]?.timeoutMs ?? config.hermes.timeoutMs
+        timeoutMs: request.timeoutMs ?? config.workers[route.worker]?.timeoutMs ?? config.hermes.timeoutMs,
+        maxTurns: config.workers[route.worker]?.maxTurns
       });
     } catch (error) {
       const after = config.execution.collectGitEvidence
@@ -93,7 +94,9 @@ export async function runWorker(
       config.workers[route.worker]?.sideEffectPolicy ?? config.safety.defaultSideEffectPolicy
     );
     const warnings = [...check.warnings];
-    if (runtimeResult.stderr.trim()) warnings.push(redactSensitive(runtimeResult.stderr.trim()));
+    const diagnosticStderr = runtimeResult.stderr.replace(/^session_id:\s*\S+\s*$/gmi, "").trim();
+    if (diagnosticStderr) warnings.push(redactSensitive(diagnosticStderr));
+    if (runtimeResult.usageWarning) warnings.push(runtimeResult.usageWarning);
     const status = check.warnings.length > 0
       ? "policy_violation"
       : runtimeResult.timedOut
@@ -130,8 +133,10 @@ export async function runWorker(
         kind: config.hermes.runtime,
         distro: config.hermes.distro ?? null,
         exitCode: null,
-        timedOut: false
+        timedOut: false,
+        sessionId: null
       },
+      usage: null,
       workspace: {
         mode: workspaceMode,
         cwd: request.cwd,
@@ -169,12 +174,7 @@ function baseResult(
     workerText: string;
     warnings: string[];
     errors: string[];
-    runtime?: {
-      runtime: "direct" | "wsl";
-      distro?: string | undefined;
-      exitCode: number | null;
-      timedOut: boolean;
-    };
+    runtime?: HermesRunResult;
   }
 ): WorkerRunResult {
   const check = compareEvidence(
@@ -203,8 +203,10 @@ function baseResult(
       kind: details.runtime?.runtime ?? config.hermes.runtime,
       distro: details.runtime?.distro ?? config.hermes.distro ?? null,
       exitCode: details.runtime?.exitCode ?? null,
-      timedOut: details.runtime?.timedOut ?? false
+      timedOut: details.runtime?.timedOut ?? false,
+      sessionId: details.runtime?.sessionId ?? null
     },
+    usage: details.runtime?.usage ?? null,
     workspace: {
       mode: request.workspaceMode ?? config.execution.defaultWorkspaceMode,
       cwd: request.cwd,
@@ -243,7 +245,8 @@ function blockedResult(
     team: "unknown",
     worker: "unknown",
     routing: { profile: "", modelRef: null, provider: null, model: null, modelSource: "none" },
-    runtime: { kind: "direct", distro: null, exitCode: null, timedOut: false },
+    runtime: { kind: "direct", distro: null, exitCode: null, timedOut: false, sessionId: null },
+    usage: null,
     workspace: { mode, cwd, gitRoot: null, headBefore: null, headAfter: null },
     evidence: { changedFiles: [], diffStat: "", statusBefore: [], statusAfter: [], outOfScopeChanges: [] },
     workerReport: { text: "" },

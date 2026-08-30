@@ -22,7 +22,8 @@ describe("worker result contract", () => {
           model: "provider/model",
           modelSource: "worker_registry"
         },
-        runtime: { kind: "direct", distro: null, exitCode: 0, timedOut: false },
+        runtime: { kind: "direct", distro: null, exitCode: 0, timedOut: false, sessionId: null },
+        usage: null,
         workspace: { mode: "shared", cwd: "C:/repo", gitRoot: "C:/repo", headBefore: "a", headAfter: "a" },
         evidence: { changedFiles: [], diffStat: "", statusBefore: [], statusAfter: [], outOfScopeChanges: [] },
         workerReport: { text: "ok" },

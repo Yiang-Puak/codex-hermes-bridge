@@ -47,6 +47,7 @@ export const WorkerSchema = z.object({
   toolsets: z.array(z.string()).default([]),
   sideEffectPolicy: SideEffectPolicySchema.default("read_only"),
   timeoutMs: z.number().int().positive().optional(),
+  maxTurns: z.number().int().positive().optional(),
   enabled: z.boolean().default(true)
 });
 export type WorkerConfig = z.infer<typeof WorkerSchema>;

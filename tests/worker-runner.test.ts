@@ -39,6 +39,7 @@ workers:
     capabilities: [code-write, test]
     toolsets: [coding]
     sideEffectPolicy: local_files_allowed
+    maxTurns: 30
 teams:
   default:
     roles:
@@ -53,12 +54,27 @@ execution:
 class FakeRuntime implements HermesRuntime {
   readonly kind = "direct" as const;
 
-  constructor(private readonly writeOutOfScope: boolean) {}
+  constructor(
+    private readonly writeOutOfScope: boolean,
+    private readonly failUsageExport = false
+  ) {}
 
   async run(command: RuntimeCommand): Promise<RuntimeResult> {
     if (command.args.includes("--help")) {
       return {
         stdout: "usage: hermes chat --query QUERY",
+        stderr: "",
+        exitCode: 0,
+        timedOut: false,
+        runtime: "direct",
+        command: "fake-hermes",
+        args: command.args
+      };
+    }
+    if (command.args[0] === "sessions") {
+      if (this.failUsageExport) throw new Error("usage export unavailable");
+      return {
+        stdout: JSON.stringify({ input_tokens: 10, output_tokens: 5, api_call_count: 2, tool_call_count: 1 }),
         stderr: "",
         exitCode: 0,
         timedOut: false,
@@ -74,9 +90,11 @@ class FakeRuntime implements HermesRuntime {
     }
     const query = command.args[command.args.indexOf("--query") + 1] ?? "";
     expect(query).toContain("FINAL RESPONSE CONTRACT");
+    expect(query).toContain("Return at most 1200 characters");
+    expect(command.args).toContain("--max-turns");
     return {
       stdout: "files changed: changed.txt",
-      stderr: "",
+      stderr: "session_id: fixture-session",
       exitCode: 0,
       timedOut: false,
       runtime: "direct",
@@ -118,6 +136,8 @@ describe("runWorker", () => {
       expect(result.evidence.outOfScopeChanges).toEqual([]);
       expect(result.evidence.diffStat).toContain("outside.txt");
       expect(result.workspace.headBefore).toBe(result.workspace.headAfter);
+      expect(result.runtime.sessionId).toBe("fixture-session");
+      expect(result.usage?.totalTokens).toBe(15);
       expect(await readFile(join(root, "changed.txt"), "utf8")).toContain("worker changed");
     } finally {
       await rm(root, { recursive: true, force: true });
@@ -128,10 +148,12 @@ describe("runWorker", () => {
     const root = await createGitFixture();
     try {
       const config = parseConfigText(configText());
-      const provider = new HermesCliProvider(config, new FakeRuntime(true));
+      const provider = new HermesCliProvider(config, new FakeRuntime(true, true));
       const result = await runWorker(config, { worker: "coder", cwd: root, task }, provider);
 
       expect(result.status).toBe("policy_violation");
+      expect(result.usage).toBeNull();
+      expect(result.warnings).toContain("Hermes usage is unavailable for session 'fixture-session'.");
       expect(result.evidence.changedFiles).toEqual(["changed.txt", "outside.txt"]);
       expect(result.evidence.outOfScopeChanges).toEqual(["outside.txt"]);
     } finally {

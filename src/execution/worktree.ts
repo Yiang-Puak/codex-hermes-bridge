@@ -1,5 +1,7 @@
+import { createHash } from "node:crypto";
 import { mkdirSync } from "node:fs";
-import { join } from "node:path";
+import { tmpdir } from "node:os";
+import { join, resolve } from "node:path";
 import { runCommand } from "../command.js";
 
 export type WorktreeInfo = {
@@ -15,7 +17,8 @@ export async function createWorktree(
 ): Promise<WorktreeInfo> {
   const safeRun = sanitizePart(runId);
   const safeTask = sanitizePart(taskId);
-  const worktreeRoot = join(gitRoot, ".worktrees");
+  const repoId = createHash("sha256").update(resolve(gitRoot)).digest("hex").slice(0, 12);
+  const worktreeRoot = join(tmpdir(), "codex-hermes-bridge", repoId);
   const path = join(worktreeRoot, `chb-${safeRun}-${safeTask}`);
   const branch = `chb/${safeRun}/${safeTask}`;
   mkdirSync(worktreeRoot, { recursive: true });
