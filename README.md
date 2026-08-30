@@ -58,6 +58,15 @@ CODEX_HERMES_BRIDGE_CONFIG = "C:/Users/you/.codex-hermes-bridge/team.yaml"
 
 Kanban durable-task tools 当前未实现，也不会在关闭时注册。独立 review 仍走兼容的 `hermes-review` Skill，不会被普通 worker 调用隐式触发。
 
+## 优化基准
+
+在同一个事件溯源 Python job queue 任务上，默认单 `qwen3.8-flash` worker
+相较于旧的 3 workers + 1 integrator 配置，将 Hermes/Qwen token 从
+2,627,930 降到 488,198（减少 81.4%），API calls 从 74 降到 15，同时保持
+20/20 测试通过。完整方法、限制和对照数据见
+[docs/optimized-benchmark.md](docs/optimized-benchmark.md)。该数据不包含协调 Codex
+会话的 token，因此不作为完整系统成本承诺。
+
 ## Task Contract
 
 每个执行任务至少包含 `id`、`objective`、`context`、`requirements`、`scope`、`acceptanceCriteria` 和 `validation`。scope 使用 `allowedPaths` / `forbiddenPaths`；可选字段包括 `dependsOn`、`ownership`、`knownRisks`、`constraints` 和 `expectedOutput`。
