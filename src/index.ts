@@ -4,11 +4,13 @@ import { existsSync } from "node:fs";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { z } from "zod";
+import type { RequestHandlerExtra } from "@modelcontextprotocol/sdk/shared/protocol.js";
+import type { ServerNotification, ServerRequest } from "@modelcontextprotocol/sdk/types.js";
 import { getConfigPath, loadConfig, writeStarterConfig } from "./config.js";
 import { HermesCliProvider } from "./providers/hermes-cli.js";
 import { publicRegistry } from "./registry.js";
 import { resolveRoute, ResolverError } from "./resolver.js";
-import { runWorker } from "./execution/worker-runner.js";
+import { runWorker, type WorkerProgress } from "./execution/worker-runner.js";
 import { runTeam } from "./execution/team-runner.js";
 import { TaskContractSchema } from "./execution/task-contract.js";
 import { WorkspaceModeSchema } from "./types.js";
@@ -132,9 +134,16 @@ server.tool(
     cwd: z.string().min(1),
     task: TaskContractSchema,
     workspaceMode: WorkspaceModeSchema.optional(),
-    timeoutMs: z.number().int().positive().optional()
+    timeoutMs: z.number().int().positive().optional(),
+    maxTurns: z.number().int().positive().optional()
   },
-  async (input) => jsonContent(await runWorker(loadConfig(), input))
+  async (input, extra) => {
+    const notify = progressNotifier(extra);
+    return jsonContent(await withHeartbeat(
+      notify,
+      () => runWorker(loadConfig(), input, undefined, { onProgress: notify })
+    ));
+  }
 );
 
 server.tool(
@@ -152,11 +161,16 @@ server.tool(
         modelOverride: z.string().min(1).optional(),
         cwd: z.string().min(1),
         task: TaskContractSchema,
-        workspaceMode: WorkspaceModeSchema.optional()
+        workspaceMode: WorkspaceModeSchema.optional(),
+        timeoutMs: z.number().int().positive().optional(),
+        maxTurns: z.number().int().positive().optional()
       })
     ).min(1)
   },
-  async (input) => jsonContent(await runTeam(loadConfig(), input))
+  async (input, extra) => jsonContent(await withHeartbeat(
+    progressNotifier(extra),
+    () => runTeam(loadConfig(), input)
+  ))
 );
 
 if (loadConfig().panel.enabled) {
@@ -285,4 +299,38 @@ function jsonContent(value: unknown) {
       }
     ]
   };
+}
+
+type ToolExtra = RequestHandlerExtra<ServerRequest, ServerNotification>;
+
+function progressNotifier(extra: ToolExtra): (stage: string | WorkerProgress, detail?: string) => void {
+  const progressToken = extra._meta?.progressToken;
+  let sequence = 0;
+  return (stage, detail) => {
+    if (progressToken === undefined) return;
+    const item = typeof stage === "string" ? { stage, detail } : stage;
+    void extra.sendNotification({
+      method: "notifications/progress",
+      params: {
+        progressToken,
+        progress: ++sequence,
+        message: [item.stage, item.detail].filter(Boolean).join(": ")
+      }
+    }).catch(() => undefined);
+  };
+}
+
+async function withHeartbeat<T>(
+  notify: (stage: string, detail?: string) => void,
+  run: () => Promise<T>
+): Promise<T> {
+  const started = Date.now();
+  const timer = setInterval(() => {
+    notify("running", `Hermes is still active (${Math.round((Date.now() - started) / 1000)}s).`);
+  }, 30_000);
+  try {
+    return await run();
+  } finally {
+    clearInterval(timer);
+  }
 }

@@ -74,11 +74,11 @@ export function buildWorkerPrompt(
     "",
     "EXECUTION PROCEDURE",
     ...numberedOrNone([
-      "Inspect the relevant implementation.",
+      "Start with allowedPaths and ownership. Do not recursively scan unrelated directories; read another file only for a named dependency needed by this task.",
       "Determine the smallest complete change.",
       "Implement it.",
       "Add or update tests where appropriate.",
-      "Run the listed validation once; debug and rerun only checks that fail because of the change.",
+      "Run the listed validation once. On a compile or test failure, report it immediately unless one obvious local correction is sufficient; do not loop through repeated broad validation.",
       "Use one simple command per invocation. Avoid unrelated cleanup, recursive deletion, and line-ending rewrites.",
       "Do not create temporary test scripts unless the existing test system cannot verify a required behavior.",
       "Inspect the resulting diff once before reporting."

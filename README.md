@@ -50,7 +50,7 @@ CODEX_HERMES_BRIDGE_CONFIG = "C:/Users/you/.codex-hermes-bridge/team.yaml"
 - `hermes_bridge_health`：检查 runtime、Hermes 版本和 registry 计数，不调用模型。
 - `hermes_team_list`：列出公开的 Team/Worker/Model/Provider metadata 和 Hermes profiles，不返回 secret。
 - `hermes_team_route`：按 team、role、worker、capability 和 cost preference 做确定性路由。
-- `hermes_worker_run`：执行一个完整 Task Contract，并返回真实 Git 前后状态、changed files、diff stat、exit code、stderr 和 worker 报告。
+- `hermes_worker_run`：执行一个完整 Task Contract，并返回本次执行的 Git 增量证据、阶段进度、exit code 和经过长度上限处理的 worker 报告；可按次覆盖 `timeoutMs`、`maxTurns`。
 - `hermes_team_run`：并发执行 Codex 已经拆好的独立任务；并发上限受全局、Team 和本次请求三层限制。
 - `hermes_panel_run`：可选的只读/advice panel，必须在配置中启用；bridge 只返回独立结果，不做语义综合。
 
@@ -71,11 +71,13 @@ Kanban durable-task tools 当前未实现，也不会在关闭时注册。独立
 
 每个执行任务至少包含 `id`、`objective`、`context`、`requirements`、`scope`、`acceptanceCriteria` 和 `validation`。scope 使用 `allowedPaths` / `forbiddenPaths`；可选字段包括 `dependsOn`、`ownership`、`knownRisks`、`constraints` 和 `expectedOutput`。
 
-bridge 会将合同转换成包含 `ROLE`、`OBJECTIVE`、`CONTEXT`、`CURRENT STATE`、`SCOPE / OWNERSHIP`、`REQUIREMENTS`、`CONSTRAINTS`、`EXECUTION PROCEDURE`、`ACCEPTANCE CRITERIA`、`VALIDATION` 和 `FINAL RESPONSE CONTRACT` 的 worker prompt。Sol 仍必须检查实际 diff 和测试结果，不能只相信 Hermes 的文字总结。
+bridge 不会把整个仓库打包进 prompt。它发送合同、Git HEAD、脏路径总数及任务范围内的既有脏路径；worker 必须先读取 `allowedPaths`，只有命名依赖确有需要才读取其他文件。合同仍会包含 `ROLE`、`OBJECTIVE`、`CONTEXT`、`CURRENT STATE`、`SCOPE / OWNERSHIP`、`REQUIREMENTS`、`CONSTRAINTS`、`EXECUTION PROCEDURE`、`ACCEPTANCE CRITERIA`、`VALIDATION` 和 `FINAL RESPONSE CONTRACT`。Sol 必须检查实际 diff 和测试结果，不能只相信 Hermes 的文字总结。
+
+实践上不要把“新增一条测试”单独派给 Hermes。将同一模块内 2–4 个相互关联的实现与测试组合成一个边界清楚的合同；给出最多一次的验证命令，并在第一次明确失败后交回 Codex。这样避免 agent 为极小改动重复重建工作区上下文。
 
 ## Registry 与模型替换
 
-配置关系是 `Team role -> Worker -> profile + modelRef -> Provider + model`。显式 `worker` 优先于 role；没有显式 worker/role 时使用 `routing.defaultWorker`；显式 `modelOverride` 只有在 `routing.allowModelOverride` 开启时生效。model 缺失、disabled、provider 缺失或 route 不可用都会返回结构化失败；默认不会静默切换到付费模型或其他 provider。
+配置关系是 `Team role -> Worker -> profile + modelRef -> Provider + model`。显式 `worker` 优先于 role；没有显式 worker/role 时使用 `routing.defaultWorker`；显式 `modelOverride` 只有在 `routing.allowModelOverride` 开启时生效。`modelOverride` 可使用 registry 引用（如 `qwen-flash`）或唯一的真实模型名（如 `qwen3.8-flash`）；名称映射到多个 registry 项时 bridge 拒绝猜测。model 缺失、disabled、provider 缺失或 route 不可用都会返回结构化失败；默认不会静默切换到付费模型或其他 provider。
 
 当前示例中 `routing.defaultWorker: quick`，所以未指定路由时使用 `provider: alibaba` 的 `qwen3.8-flash`。调用时只有明确传 `worker: coder`、对应 `role` 或 `modelOverride` 才切换到 `provider: deepseek` 的 `deepseek-v4-flash`；bridge 不根据自然语言猜任务复杂度，也不会在两者之间静默 fallback。
 
@@ -89,13 +91,14 @@ Provider credential 由 Hermes 自己管理或从环境读取。不要把 `sk-..
 
 ## Runtime 与安全边界
 
-- `direct` runtime 直接启动配置中的 Hermes command；`wsl` runtime 使用配置中的 distro、cwd 和 command。
-- child process 使用 argv 数组，不经过 shell；超时会返回 `timed_out`。
-- worker 可配置 `maxTurns`，bridge 会传递 Hermes `--max-turns`，用于限制异常长会话。
+- `direct` runtime 直接启动配置中的 Hermes command；`wsl` runtime 使用配置中的 distro、cwd 和 command。每个 worker 都可用 `runtime`、`command`、`distro` 覆盖全局设置。因此可让一般任务继续走 WSL，同时为需要 `flutter.bat` 等 Windows-only 工具的 worker 配置 `runtime: direct` 和原生 Windows Hermes command，不通过 `cmd.exe /c` 包装。
+- child process 使用 argv 数组，不经过 shell；超时先请求结束，5 秒仍未退出才强制结束，并返回 `timed_out`、已落盘的增量证据与末尾 worker 报告，便于从中间结果继续。
+- worker 可配置 `maxTurns`，本次调用也可覆盖 `maxTurns`；bridge 会传递 Hermes `--max-turns`，并将明确的迭代预算耗尽标记为 `budget_exhausted`。简单任务建议保持 30；需要更长执行时显式提高，超过 50 时优先拆分。
+- MCP 调用带 progress token 时，bridge 会在路由、执行前后证据、完成/超时阶段发送进度，并每 30 秒发送 heartbeat。
 - Hermes quiet-mode 返回 session ID 时，bridge 通过公开的 `sessions export` 接口采集 token、API call 和成本状态，team result 会汇总各 worker 用量；不读取 Hermes 私有数据库，采集失败也不会改变执行结果。
 - `safety.allowedWorkspaceRoots` 可限制 bridge 接受的 workspace 根目录。
 - `acceptHooks` 和 `allowWorkerCommits` 默认关闭；外部副作用必须由配置和任务合同明确允许。
-- Git evidence 是确定性证据，不是 sandbox；它同时检查 worker 运行期间留下的工作区变更和允许提交时产生的 commit diff。并行 worktree 位于系统临时目录，不污染目标仓库；bridge 不会自动删除、回滚或覆盖用户已有修改。
+- Git evidence 是确定性证据，不是 sandbox；它会对任务前后每个脏路径比较状态与内容指纹，只报告本次净变更，并在允许提交时加上本次 HEAD 范围内的 commit diff。既有脏文件未被 worker 改动不会混入 `changedFiles`；已有脏文件被再次修改会被正确报告。并行 worktree 位于系统临时目录，不污染目标仓库；bridge 不会自动删除、回滚或覆盖用户已有修改。
 
 ## 旧 PowerShell 入口
 

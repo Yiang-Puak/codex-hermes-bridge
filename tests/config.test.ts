@@ -26,6 +26,8 @@ workers:
   coder:
     profile: executor
     model: worker-model
+    runtime: direct
+    command: C:/Hermes/hermes.exe
     maxTurns: 30
     capabilities: [code-write]
 teams:
@@ -36,6 +38,8 @@ teams:
 
     expect(config.workers.coder?.profile).toBe("executor");
     expect(config.workers.coder?.maxTurns).toBe(30);
+    expect(config.workers.coder?.runtime).toBe("direct");
+    expect(config.workers.coder?.command).toBe("C:/Hermes/hermes.exe");
     expect(config.models["worker-model"]?.provider).toBe("local");
     expect(config.teams.default?.roles.coder).toBe("coder");
   });

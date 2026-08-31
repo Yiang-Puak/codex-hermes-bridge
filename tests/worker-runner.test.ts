@@ -6,7 +6,7 @@ import { runCommand } from "../src/command.js";
 import { parseConfigText } from "../src/config.js";
 import { HermesCliProvider } from "../src/providers/hermes-cli.js";
 import type { HermesRuntime, RuntimeCommand, RuntimeResult } from "../src/runtime/runtime.js";
-import { runWorker } from "../src/execution/worker-runner.js";
+import { runWorker, truncateWorkerReport } from "../src/execution/worker-runner.js";
 import type { TaskContract } from "../src/execution/task-contract.js";
 
 const task: TaskContract = {
@@ -132,9 +132,11 @@ describe("runWorker", () => {
       const result = await runWorker(config, { worker: "coder", cwd: root, task }, provider);
 
       expect(result.status).toBe("completed");
-      expect(result.evidence.changedFiles).toEqual(["changed.txt", "outside.txt"]);
+      expect(result.evidence.changedFiles).toEqual(["changed.txt"]);
       expect(result.evidence.outOfScopeChanges).toEqual([]);
-      expect(result.evidence.diffStat).toContain("outside.txt");
+      expect(result.evidence.diffStat).toContain("changed.txt");
+      expect(result.evidence.diffStat).not.toContain("outside.txt");
+      expect(result.progress.map((item) => item.stage)).toContain("evidence_after");
       expect(result.workspace.headBefore).toBe(result.workspace.headAfter);
       expect(result.runtime.sessionId).toBe("fixture-session");
       expect(result.usage?.totalTokens).toBe(15);
@@ -159,5 +161,34 @@ describe("runWorker", () => {
     } finally {
       await rm(root, { recursive: true, force: true });
     }
+  });
+
+  it("lets a worker select the native direct runtime over a global WSL runtime", async () => {
+    const root = await createGitFixture();
+    try {
+      const config = parseConfigText(configText().replace(
+        "runtime: direct\n  command: fake-hermes",
+        "runtime: wsl\n  command: hermes\n  distro: Does-Not-Matter"
+      ).replace(
+        "profile: executor\n    model: fixture",
+        "profile: executor\n    model: fixture\n    runtime: direct\n    command: node"
+      ));
+      const result = await runWorker(config, {
+        worker: "coder",
+        cwd: root,
+        task,
+        timeoutMs: 5_000
+      });
+
+      expect(result.status).toBe("failed");
+      expect(result.runtime.kind).toBe("direct");
+      expect(result.runtime.distro).toBeNull();
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("keeps only the tail of oversized worker reports", () => {
+    expect(truncateWorkerReport("0123456789", 4)).toBe("[... 6 earlier characters omitted ...]\n6789");
   });
 });

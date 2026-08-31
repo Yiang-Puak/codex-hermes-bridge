@@ -1,12 +1,19 @@
 {
   "name": "codex-hermes-bridge",
-  "version": "0.4.0",
+  "version": "0.4.0+codex.20260831080121",
   "description": "Local MCP execution and review bridge that lets Codex plan and delegate work to configurable Hermes teams and replaceable models.",
   "author": {
     "name": "Codex Hermes Bridge"
   },
   "license": "MIT",
-  "keywords": ["codex", "hermes", "execution", "team", "review", "models"],
+  "keywords": [
+    "codex",
+    "hermes",
+    "execution",
+    "team",
+    "review",
+    "models"
+  ],
   "skills": "./skills/",
   "interface": {
     "displayName": "Codex Hermes Bridge",
@@ -14,7 +21,9 @@
     "longDescription": "Let Codex plan, route, and verify bounded Hermes Worker/Team execution while keeping the existing independent review pipeline compatible.",
     "developerName": "Codex Hermes Bridge",
     "category": "Engineering",
-    "capabilities": ["Interactive"],
+    "capabilities": [
+      "Interactive"
+    ],
     "defaultPrompt": [
       "Use Hermes to implement this planned task and let Codex review the real Git and test evidence.",
       "Split this large change into independent Hermes worker tasks with worktree isolation.",

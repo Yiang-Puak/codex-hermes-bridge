@@ -217,6 +217,7 @@ function failedWorkerResult(
     workspace: { mode: task.workspaceMode ?? "shared", cwd: task.cwd, gitRoot: null, headBefore: null, headAfter: null },
     evidence: { changedFiles: [], diffStat: "", statusBefore: [], statusAfter: [], outOfScopeChanges: [] },
     workerReport: { text: "" },
+    progress: [],
     warnings: [],
     errors: [redactSensitive(error instanceof Error ? error.message : String(error))],
     startedAt: new Date().toISOString(),

@@ -55,6 +55,8 @@ workers:
     sideEffectPolicy: local_files_allowed
     timeoutMs: 900000
     maxTurns: 30
+    # Set runtime: direct on a native Windows Hermes installation when the
+    # task must run Windows-only tools such as flutter.bat.
   coder:
     profile: default
     model: deepseek-flash
@@ -92,6 +94,7 @@ execution:
   maxParallel: 3
   collectGitEvidence: true
   allowWorkerCommits: false
+  maxWorkerReportChars: 4000
 
 safety:
   defaultSideEffectPolicy: local_files_allowed

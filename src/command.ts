@@ -22,11 +22,13 @@ export function runCommand(
     let stderr = "";
     let timedOut = false;
     let settled = false;
+    let killTimer: NodeJS.Timeout | undefined;
     const timer =
       options.timeoutMs && options.timeoutMs > 0
         ? setTimeout(() => {
             timedOut = true;
             child.kill("SIGTERM");
+            killTimer = setTimeout(() => child.kill("SIGKILL"), 5_000);
           }, options.timeoutMs)
         : undefined;
 
@@ -42,12 +44,14 @@ export function runCommand(
       if (settled) return;
       settled = true;
       if (timer) clearTimeout(timer);
+      if (killTimer) clearTimeout(killTimer);
       reject(error);
     });
     child.on("close", (exitCode) => {
       if (settled) return;
       settled = true;
       if (timer) clearTimeout(timer);
+      if (killTimer) clearTimeout(killTimer);
       resolve({ stdout, stderr, exitCode, timedOut });
     });
 

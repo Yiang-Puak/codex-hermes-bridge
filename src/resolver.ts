@@ -32,6 +32,7 @@ export type ResolverErrorCode =
   | "no_capability_match"
   | "model_override_disabled"
   | "model_unavailable"
+  | "model_ambiguous"
   | "missing_provider"
   | "paid_fallback_disabled";
 
@@ -58,7 +59,9 @@ export function resolveRoute(config: BridgeConfig, request: RouteRequest = {}): 
   }
 
   const role = request.role ?? worker.role ?? "worker";
-  const modelRef = request.modelOverride ?? worker.model;
+  const modelRef = request.modelOverride
+    ? resolveModelReference(config, request.modelOverride)
+    : worker.model;
   const route = resolveModel(config, worker, modelRef, request.modelOverride);
   const usedDefaultWorker =
     !request.worker &&
@@ -84,6 +87,20 @@ export function resolveRoute(config: BridgeConfig, request: RouteRequest = {}): 
     candidates: candidateNames(config, request, teamName, team),
     why: `${why} -> ${route.modelRef ? `model ${route.modelRef}` : "profile default"}`
   };
+}
+
+function resolveModelReference(config: BridgeConfig, requested: string): string {
+  if (getModel(config, requested)) return requested;
+  const matches = Object.entries(config.models)
+    .filter(([, model]) => model.enabled && model.model === requested)
+    .map(([reference]) => reference);
+  if (matches.length > 1) {
+    throw new ResolverError(
+      "model_ambiguous",
+      `Model name '${requested}' matches multiple registry references: ${matches.join(", ")}.`
+    );
+  }
+  return matches[0] ?? requested;
 }
 
 function selectWorkerName(

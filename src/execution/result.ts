@@ -7,6 +7,7 @@ export const RunStatusSchema = z.enum([
   "completed",
   "failed",
   "timed_out",
+  "budget_exhausted",
   "routing_failed",
   "policy_violation",
   "invalid_result",
@@ -65,6 +66,11 @@ export const WorkerRunResultSchema = z.object({
     outOfScopeChanges: z.array(z.string())
   }),
   workerReport: z.object({ text: z.string() }),
+  progress: z.array(z.object({
+    stage: z.string().min(1),
+    at: z.string(),
+    detail: z.string().optional()
+  })).default([]),
   warnings: z.array(z.string()),
   errors: z.array(z.string()),
   startedAt: z.string(),

@@ -102,6 +102,14 @@ workers:
     expect(config().workers.coder?.model).toBe("free-coder");
   });
 
+  it("accepts the provider-facing model name as an override", () => {
+    const result = resolveRoute(config(), { worker: "coder", modelOverride: "deepseek/model" });
+
+    expect(result.selected.modelRef).toBe("paid-coder");
+    expect(result.selected.provider).toBe("deepseek");
+    expect(result.selected.model).toBe("deepseek/model");
+  });
+
   it("uses profile default only when the worker has no model reference", () => {
     const result = resolveRoute(config(), { worker: "reviewer" });
 

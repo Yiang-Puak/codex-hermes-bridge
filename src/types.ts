@@ -41,6 +41,9 @@ export type ModelConfig = z.infer<typeof ModelSchema>;
 export const WorkerSchema = z.object({
   profile: z.string().min(1),
   model: z.string().min(1).optional(),
+  runtime: RuntimeKindSchema.optional(),
+  command: z.string().min(1).optional(),
+  distro: z.string().min(1).optional(),
   role: z.string().min(1).optional(),
   description: z.string().optional(),
   capabilities: z.array(z.string()).default([]),
@@ -103,6 +106,7 @@ export const BridgeConfigSchema = z.object({
       maxParallel: z.number().int().positive().default(3),
       collectGitEvidence: z.boolean().default(true),
       allowWorkerCommits: z.boolean().default(false),
+      maxWorkerReportChars: z.number().int().positive().default(4000),
       keepArtifacts: z.boolean().default(false)
     })
     .default({
@@ -112,6 +116,7 @@ export const BridgeConfigSchema = z.object({
       maxParallel: 3,
       collectGitEvidence: true,
       allowWorkerCommits: false,
+      maxWorkerReportChars: 4000,
       keepArtifacts: false
     }),
   safety: z

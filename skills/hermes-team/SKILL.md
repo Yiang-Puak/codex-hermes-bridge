@@ -35,6 +35,12 @@ acceptanceCriteria
 validation
 ```
 
+Keep each contract to a cohesive module-sized change (typically 2–4 related
+implementation/test edits), not one tiny test. Set explicit file ownership,
+one focused validation command, a 3–5 minute `timeoutMs`, and a suitable
+`maxTurns`. On the first non-obvious validation failure, return the partial
+result to Sol rather than spending many turns on broad retries.
+
 4. Read `status`, resolved profile/provider/model, actual changed files, Git
    before/after evidence, validation output, warnings, and errors.
 5. Inspect the real diff and run or verify the acceptance criteria yourself.
@@ -65,6 +71,9 @@ worker worktree paths and concise Git evidence, not full worker transcripts.
 - A different worker/model/provider requires an explicit user request.
 - Registry model references resolve to explicit Hermes `--provider` and
   `--model` values.
+- `modelOverride` accepts either a registry reference or one unique configured
+  provider-facing model name. Prefer `worker: quick` for the configured
+  Qwen3.8-Flash route.
 - A missing or disabled model/provider is a routing failure.
 - Do not silently fall back to a paid or unrelated model. Ask Sol/user to
   choose another configured route.
@@ -77,6 +86,14 @@ The bridge sends ROLE, OBJECTIVE, CONTEXT, CURRENT STATE, SCOPE/OWNERSHIP,
 REQUIREMENTS, CONSTRAINTS, EXECUTION PROCEDURE, ACCEPTANCE CRITERIA,
 VALIDATION, and a final evidence contract. Do not use vague worker requests
 such as “fix it” as the formal task.
+
+The bridge sends compact current state, not the repository contents. Start
+inside `allowedPaths`; do not recursively search unrelated directories. On a
+dirty workspace, treat `evidence.changedFiles` as the task's before/after
+incremental change set, then inspect its real diff. For Windows-only tooling,
+use a worker configured with `runtime: direct`; leave WSL workers to run
+portable checks. On timeout or `budget_exhausted`, inspect the retained tail
+report and incremental files before resuming instead of starting over.
 
 ## Safety
 

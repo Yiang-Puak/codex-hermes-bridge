@@ -44,4 +44,23 @@ describe("Git evidence", () => {
       await rm(root, { recursive: true, force: true });
     }
   });
+
+  it("distinguishes untouched dirty files from dirty files changed again by the worker", async () => {
+    const root = await createFixture();
+    try {
+      await writeFile(join(root, "README.md"), "user baseline\n", "utf8");
+      await writeFile(join(root, "untouched.txt"), "existing dirty file\n", "utf8");
+      const before = await captureGitEvidence(root);
+
+      await writeFile(join(root, "README.md"), "worker changed the dirty file\n", "utf8");
+      const after = await captureGitEvidence(root, before.head ?? undefined);
+      const check = compareEvidence(before, after, ["README.md"], [], false, "local_files_allowed");
+
+      expect(check.changedFiles).toEqual(["README.md"]);
+      expect(check.diffStat).toContain("README.md | changed during worker run");
+      expect(check.diffStat).not.toContain("untouched.txt");
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
 });
