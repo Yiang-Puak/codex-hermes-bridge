@@ -37,13 +37,22 @@ models:
     tags:
       - coding
       - agent
+  deepseek-v4.1-flash:
+    provider: deepseek
+    model: deepseek-v4.1-flash
+    enabled: true
+    costClass: unknown
+    tags:
+      - coding
+      - agent
+      - default
 
 workers:
   quick:
     profile: default
-    model: qwen-flash
-    role: simple-implementation
-    description: Preferred worker for simple, bounded coding tasks
+    model: deepseek-v4.1-flash
+    role: implementation
+    description: Preferred default worker using DeepSeek V4.1 Flash
     capabilities:
       - repository-read
       - code-write

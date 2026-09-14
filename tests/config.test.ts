@@ -1,4 +1,7 @@
 import { describe, expect, it } from "vitest";
+import { readFileSync } from "node:fs";
+import { fileURLToPath } from "node:url";
+import { dirname, resolve } from "node:path";
 import { parseConfigText } from "../src/config.js";
 
 describe("BridgeConfigSchema", () => {
@@ -42,5 +45,17 @@ teams:
     expect(config.workers.coder?.command).toBe("C:/Hermes/hermes.exe");
     expect(config.models["worker-model"]?.provider).toBe("local");
     expect(config.teams.default?.roles.coder).toBe("coder");
+  });
+
+  it("uses DeepSeek V4.1 Flash as the default example route", () => {
+    const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
+    const config = parseConfigText(readFileSync(resolve(repoRoot, "examples", "team.yaml"), "utf8"));
+    expect(config.routing.defaultWorker).toBe("quick");
+    expect(config.workers.quick?.model).toBe("deepseek-v4.1-flash");
+    expect(config.models["deepseek-v4.1-flash"]).toMatchObject({
+      provider: "deepseek",
+      model: "deepseek-v4.1-flash",
+      enabled: true
+    });
   });
 });

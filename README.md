@@ -30,7 +30,7 @@ node ./dist/index.js doctor
 
 `init-config` 默认生成 `%USERPROFILE%/.codex-hermes-bridge/team.yaml`。也可以通过 `CODEX_HERMES_BRIDGE_CONFIG` 指定配置文件。
 
-把 [examples/team.yaml](examples/team.yaml) 复制到用户配置目录后，按本机的 profile、provider、model 和 runtime 修改。公开示例将未指定模型的请求固定路由到 `quick`（阿里百炼 `qwen3.8-flash`）；只有用户明确指定其他 worker、model 或 provider 时才切换到其他路由，例如 `coder`（DeepSeek 官方 API `deepseek-v4-flash`）。
+把 [examples/team.yaml](examples/team.yaml) 复制到用户配置目录后，按本机的 profile、provider、model 和 runtime 修改。公开示例和默认本机配置将未指定模型的请求固定路由到 `quick`（DeepSeek 官方 API `deepseek-v4.1-flash`）；只有用户明确指定其他 worker、model 或 provider 时才切换到其他路由。旧的 `deepseek-v4-flash` 和 Qwen 路由仍可显式配置使用。
 
 在 Codex 配置中添加 MCP server：
 
@@ -79,7 +79,7 @@ bridge 不会把整个仓库打包进 prompt。它发送合同、Git HEAD、脏�
 
 配置关系是 `Team role -> Worker -> profile + modelRef -> Provider + model`。显式 `worker` 优先于 role；没有显式 worker/role 时使用 `routing.defaultWorker`；显式 `modelOverride` 只有在 `routing.allowModelOverride` 开启时生效。`modelOverride` 可使用 registry 引用（如 `qwen-flash`）或唯一的真实模型名（如 `qwen3.8-flash`）；名称映射到多个 registry 项时 bridge 拒绝猜测。model 缺失、disabled、provider 缺失或 route 不可用都会返回结构化失败；默认不会静默切换到付费模型或其他 provider。
 
-当前示例中 `routing.defaultWorker: quick`，所以未指定路由时使用 `provider: alibaba` 的 `qwen3.8-flash`。调用时只有明确传 `worker: coder`、对应 `role` 或 `modelOverride` 才切换到 `provider: deepseek` 的 `deepseek-v4-flash`；bridge 不根据自然语言猜任务复杂度，也不会在两者之间静默 fallback。
+当前示例中 `routing.defaultWorker: quick`，所以未指定路由时使用 `provider: deepseek` 的 `deepseek-v4.1-flash`。调用时只有明确传 `worker`、对应 `role` 或 `modelOverride` 才切换到其他配置路由；bridge 不根据自然语言猜任务复杂度，也不会在模型之间静默 fallback。
 
 Provider credential 由 Hermes 自己管理或从环境读取。不要把 `sk-...`、`DASHSCOPE_API_KEY`、`DEEPSEEK_API_KEY` 或任何其他 secret 写入本仓库、Task Contract、MCP 参数或 worker 输出。
 
