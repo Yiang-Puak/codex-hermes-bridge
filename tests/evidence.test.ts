@@ -1,9 +1,14 @@
-import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, rm, symlink, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { describe, expect, it } from "vitest";
 import { runCommand } from "../src/command.js";
-import { captureGitEvidence, compareEvidence } from "../src/execution/evidence.js";
+import { captureGitEvidence, compareEvidence, matchesPath } from "../src/execution/evidence.js";
+
+async function git(root: string, ...args: string[]): Promise<void> {
+  const result = await runCommand("git", ["-C", root, ...args], { timeoutMs: 10_000 });
+  if (result.exitCode !== 0) throw new Error(result.stderr);
+}
 
 async function createFixture(): Promise<string> {
   const root = await mkdtemp(join(tmpdir(), "chb-evidence-"));
@@ -62,5 +67,122 @@ describe("Git evidence", () => {
     } finally {
       await rm(root, { recursive: true, force: true });
     }
+  });
+
+  it("detects index-only changes when a file remains MM", async () => {
+    const root = await createFixture();
+    try {
+      await writeFile(join(root, "README.md"), "first index\n", "utf8");
+      await git(root, "add", "README.md");
+      await writeFile(join(root, "README.md"), "working tree\n", "utf8");
+      const before = await captureGitEvidence(root);
+      expect(before.status).toContain("MM README.md");
+
+      await writeFile(join(root, "README.md"), "second index\n", "utf8");
+      await git(root, "add", "README.md");
+      await writeFile(join(root, "README.md"), "working tree\n", "utf8");
+      const after = await captureGitEvidence(root, before.head ?? undefined);
+      const check = compareEvidence(before, after, ["README.md"], [], false, "local_files_allowed");
+
+      expect(after.status).toContain("MM README.md");
+      expect(check.changedFiles).toEqual(["README.md"]);
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("reports both paths for a staged rename and flags the forbidden source", async () => {
+    const root = await createFixture();
+    try {
+      await writeFile(join(root, "protected.txt"), "protected\n", "utf8");
+      await git(root, "add", "protected.txt");
+      await git(root, "commit", "-qm", "protected file");
+      const before = await captureGitEvidence(root);
+
+      const destination = "allowed name 名.txt";
+      await git(root, "mv", "protected.txt", destination);
+      const after = await captureGitEvidence(root, before.head ?? undefined);
+      const check = compareEvidence(before, after, [destination], ["protected.txt"], false, "local_files_allowed");
+
+      expect(after.changedFiles).toEqual([destination, "protected.txt"]);
+      expect(check.changedFiles).toEqual([destination, "protected.txt"]);
+      expect(check.outOfScopeChanges).toEqual(["protected.txt"]);
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("reports both paths for a committed rename, including the forbidden source", async () => {
+    const root = await createFixture();
+    try {
+      await writeFile(join(root, "protected.txt"), "protected\n", "utf8");
+      await git(root, "add", "protected.txt");
+      await git(root, "commit", "-qm", "protected file");
+      const before = await captureGitEvidence(root);
+
+      const destination = "allowed name 名.txt";
+      await git(root, "mv", "protected.txt", destination);
+      await git(root, "commit", "-qm", "rename protected file");
+      const after = await captureGitEvidence(root, before.head ?? undefined);
+      const check = compareEvidence(before, after, [destination], ["protected.txt"], true, "local_files_allowed");
+
+      expect(after.committedChangedFiles).toEqual([destination, "protected.txt"]);
+      expect(check.changedFiles).toEqual([destination, "protected.txt"]);
+      expect(check.outOfScopeChanges).toEqual(["protected.txt"]);
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("preserves unicode and whitespace paths from NUL-delimited Git output", async () => {
+    const root = await createFixture();
+    try {
+      const path = "quote ' and space 名.txt";
+      await writeFile(join(root, path), "unicode path\n", "utf8");
+      const evidence = await captureGitEvidence(root);
+
+      expect(evidence.changedFiles).toContain(path);
+      expect(evidence.status.some((line) => line.includes(path))).toBe(true);
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("fingerprints symlink targets when the platform permits symlinks", async ({ skip }) => {
+    const root = await createFixture();
+    try {
+      const link = join(root, "link.txt");
+      await writeFile(join(root, "target-a.txt"), "a\n", "utf8");
+      await writeFile(join(root, "target-b.txt"), "b\n", "utf8");
+      try {
+        await symlink("target-a.txt", link);
+      } catch (error) {
+        const code = typeof error === "object" && error !== null && "code" in error
+          ? (error as { code?: unknown }).code
+          : undefined;
+        if (["EACCES", "EPERM", "UNKNOWN"].includes(String(code))) {
+          skip();
+          return;
+        }
+        throw error;
+      }
+      const before = await captureGitEvidence(root);
+      await rm(link, { force: true });
+      await symlink("target-b.txt", link);
+      const after = await captureGitEvidence(root, before.head ?? undefined);
+      const check = compareEvidence(before, after, ["link.txt"], [], false, "local_files_allowed");
+
+      expect(check.changedFiles).toEqual(["link.txt"]);
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("matches recursive directories at zero depth and treats ? as literal", () => {
+    expect(matchesPath("file.ts", "**/*.ts")).toBe(true);
+    expect(matchesPath("src/file.ts", "src/**/file.ts")).toBe(true);
+    expect(matchesPath("src/nested/file.ts", "src/**/file.ts")).toBe(true);
+    expect(matchesPath("literal?.txt", "literal?.txt")).toBe(true);
+    expect(matchesPath("literalX.txt", "literal?.txt")).toBe(false);
   });
 });
