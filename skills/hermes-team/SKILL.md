@@ -19,7 +19,7 @@ worker summary as proof of completion.
 
 1. Inspect enough repository context to define a focused contract.
 2. Unless the user explicitly names another worker, model, or provider, use
-   worker `quick` (Qwen3.8-Flash through Alibaba Model Studio), including for
+   worker `quick` (DeepSeek V4.1 Flash through the official DeepSeek API), including for
    broad tasks. Use worker `coder` (DeepSeek-V4-Flash through the official
    DeepSeek API) only when the user explicitly requests that route. Otherwise
    call `hermes_team_route` with `team`, `role`, and capabilities.
@@ -73,7 +73,7 @@ worker worktree paths and concise Git evidence, not full worker transcripts.
   `--model` values.
 - `modelOverride` accepts either a registry reference or one unique configured
   provider-facing model name. Prefer `worker: quick` for the configured
-  Qwen3.8-Flash route.
+  DeepSeek V4.1 Flash route.
 - A missing or disabled model/provider is a routing failure.
 - Do not silently fall back to a paid or unrelated model. Ask Sol/user to
   choose another configured route.

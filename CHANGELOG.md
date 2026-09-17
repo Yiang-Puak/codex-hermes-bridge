@@ -1,5 +1,13 @@
 # Changelog
 
+## Unreleased
+
+- Switched the configured `quick` route to DeepSeek V4.1 Flash and aligned the public Skill/default prompt with the live registry.
+- Hardened command execution with bounded output, stream-error propagation, cancellation, timeout handling, and profile-aware usage export.
+- Hardened Git evidence for staged/index-only edits, rename source paths, symlinks, Unicode paths, and bounded file hashing.
+- Added deterministic fail-fast/cancellation boundaries, realpath workspace-root checks, single-worker worktree execution, and structured failure results.
+- Added JSON secret redaction coverage and rejected configuration flags whose behavior is not implemented.
+
 ## 0.4.0
 
 - Configured Qwen3.8-Flash through Alibaba Model Studio as the deterministic default (`routing.defaultWorker: quick`); DeepSeek-V4-Flash remains an explicit-only route through the official DeepSeek API.

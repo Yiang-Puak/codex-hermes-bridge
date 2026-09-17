@@ -60,10 +60,10 @@ Kanban durable-task tools 当前未实现，也不会在关闭时注册。独立
 
 ## 优化基准
 
-在同一个事件溯源 Python job queue 任务上，默认单 `qwen3.8-flash` worker
+历史基准在同一个事件溯源 Python job queue 任务上使用单 `qwen3.8-flash` worker，
 相较于旧的 3 workers + 1 integrator 配置，将 Hermes/Qwen token 从
 2,627,930 降到 488,198（减少 81.4%），API calls 从 74 降到 15，同时保持
-20/20 测试通过。完整方法、限制和对照数据见
+20/20 测试通过。该数据反映历史 Qwen 路由，不代表当前默认模型。完整方法、限制和对照数据见
 [docs/optimized-benchmark.md](docs/optimized-benchmark.md)。该数据不包含协调 Codex
 会话的 token，因此不作为完整系统成本承诺。
 
@@ -97,7 +97,7 @@ Provider credential 由 Hermes 自己管理或从环境读取。不要把 `sk-..
 - MCP 调用带 progress token 时，bridge 会在路由、执行前后证据、完成/超时阶段发送进度，并每 30 秒发送 heartbeat。
 - Hermes quiet-mode 返回 session ID 时，bridge 通过公开的 `sessions export` 接口采集 token、API call 和成本状态，team result 会汇总各 worker 用量；不读取 Hermes 私有数据库，采集失败也不会改变执行结果。
 - `safety.allowedWorkspaceRoots` 可限制 bridge 接受的 workspace 根目录。
-- `acceptHooks` 和 `allowWorkerCommits` 默认关闭；外部副作用必须由配置和任务合同明确允许。
+- `acceptHooks` 和 `allowWorkerCommits` 默认关闭；当前 bridge 会拒绝启用未实现的 hook、持久化 artifact、付费 fallback、Kanban 或关闭 Git evidence 的配置。
 - Git evidence 是确定性证据，不是 sandbox；它会对任务前后每个脏路径比较状态与内容指纹，只报告本次净变更，并在允许提交时加上本次 HEAD 范围内的 commit diff。既有脏文件未被 worker 改动不会混入 `changedFiles`；已有脏文件被再次修改会被正确报告。并行 worktree 位于系统临时目录，不污染目标仓库；bridge 不会自动删除、回滚或覆盖用户已有修改。
 
 ## 旧 PowerShell 入口

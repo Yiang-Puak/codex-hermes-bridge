@@ -1,6 +1,6 @@
 interface:
   display_name: "Hermes Team Execution"
   short_description: "Delegate planned Codex work to configurable Hermes workers"
-  default_prompt: "Use the Hermes execution bridge with quick/Qwen3.8-Flash by default; use another worker or model only when the user explicitly names it, then verify the real Git and test evidence in Codex."
+  default_prompt: "Use the Hermes execution bridge with quick/DeepSeek V4.1 Flash by default; use another worker or model only when the user explicitly names it, then verify the real Git and test evidence in Codex."
 policy:
   allow_implicit_invocation: true
