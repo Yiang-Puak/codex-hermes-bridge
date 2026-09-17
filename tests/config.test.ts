@@ -58,4 +58,14 @@ teams:
       enabled: true
     });
   });
+
+  it.each([
+    ["execution.collectGitEvidence", "execution:\n  collectGitEvidence: false"],
+    ["safety.acceptHooks", "safety:\n  acceptHooks: true"],
+    ["execution.keepArtifacts", "execution:\n  keepArtifacts: true"],
+    ["routing.allowPaidFallback", "routing:\n  allowPaidFallback: true"],
+    ["kanban.enabled", "kanban:\n  enabled: true"]
+  ])("rejects unsupported %s", (field, text) => {
+    expect(() => parseConfigText(text)).toThrow(field);
+  });
 });

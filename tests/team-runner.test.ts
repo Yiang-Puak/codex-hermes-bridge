@@ -25,7 +25,7 @@ class ParallelFakeRuntime implements HermesRuntime {
         args: command.args
       };
     }
-    if (command.args[0] === "sessions") {
+    if (command.args.includes("sessions") && command.args.includes("export")) {
       return {
         stdout: JSON.stringify({ input_tokens: 10, output_tokens: 5, api_call_count: 2, tool_call_count: 1 }),
         stderr: "",
@@ -53,6 +53,27 @@ class ParallelFakeRuntime implements HermesRuntime {
       command: "fake-hermes",
       args: command.args
     };
+  }
+}
+
+class FailFastRuntime implements HermesRuntime {
+  readonly kind = "direct" as const;
+  readonly runs: string[] = [];
+
+  async run(command: RuntimeCommand): Promise<RuntimeResult> {
+    if (command.args.includes("--help")) {
+      return { stdout: "usage: hermes chat --query QUERY", stderr: "", exitCode: 0, timedOut: false, runtime: "direct", command: "fake-hermes", args: command.args };
+    }
+    if (command.args.includes("sessions") && command.args.includes("export")) {
+      return { stdout: JSON.stringify({ input_tokens: 1, output_tokens: 1 }), stderr: "", exitCode: 0, timedOut: false, runtime: "direct", command: "fake-hermes", args: command.args };
+    }
+    const profile = command.args[command.args.indexOf("-p") + 1] ?? "unknown";
+    this.runs.push(profile);
+    if (profile === "fail") {
+      return { stdout: "", stderr: "failed", exitCode: 1, timedOut: false, runtime: "direct", command: "fake-hermes", args: command.args };
+    }
+    await new Promise((resolve) => setTimeout(resolve, 40));
+    return { stdout: `completed ${profile}`, stderr: "", exitCode: 0, timedOut: false, runtime: "direct", command: "fake-hermes", args: command.args };
   }
 }
 
@@ -168,6 +189,49 @@ describe("runTeam", () => {
       expect(result.status).toBe("failed");
       expect(result.results).toEqual([]);
       expect(result.errors).toEqual(["Task at index 0 is missing a non-empty top-level id."]);
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("stops queued tasks after the first failure when failFast is enabled", async () => {
+    const root = await createFixture();
+    const runtime = new FailFastRuntime();
+    const bridgeConfig = BridgeConfigSchema.parse({
+      ...config(),
+      execution: { ...config().execution, maxParallel: 1, failFast: true }
+    });
+    const worktrees: string[] = [];
+    try {
+      const result = await runTeam(bridgeConfig, {
+        team: "default",
+        mode: "parallel",
+        tasks: ["fail", "alpha", "beta"].map((worker) => ({ id: worker, worker, cwd: root, task: task(worker) }))
+      }, new HermesCliProvider(bridgeConfig, runtime));
+      worktrees.push(...result.results.map((item) => item.workspace.worktreePath).filter((value): value is string => Boolean(value)));
+      expect(runtime.runs).toEqual(["fail"]);
+      expect(result.results.map((item) => item.status)).toEqual(["failed", "blocked", "blocked"]);
+      expect(result.results[1]?.errors[0]).toContain("failFast");
+    } finally {
+      for (const worktree of worktrees) await runCommand("git", ["-C", root, "worktree", "remove", "--force", worktree], { timeoutMs: 10_000 });
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("rejects dependent tasks before starting any worker", async () => {
+    const root = await createFixture();
+    const runtime = new FailFastRuntime();
+    try {
+      const bridgeConfig = config();
+      const result = await runTeam(bridgeConfig, {
+        team: "default",
+        mode: "parallel",
+        tasks: [{ id: "dependent", worker: "alpha", cwd: root, task: { ...task("dependent"), dependsOn: ["first"] } }]
+      }, new HermesCliProvider(bridgeConfig, runtime));
+      expect(result.status).toBe("failed");
+      expect(result.results).toEqual([]);
+      expect(runtime.runs).toEqual([]);
+      expect(result.errors[0]).toContain("dependsOn");
     } finally {
       await rm(root, { recursive: true, force: true });
     }

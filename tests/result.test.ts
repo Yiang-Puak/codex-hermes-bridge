@@ -7,6 +7,9 @@ describe("worker result contract", () => {
     expect(redactSensitive(`Authorization: Bearer abc.def api_key="secret-value" ${token}`)).toBe(
       "Authorization: Bearer [REDACTED] api_key=\"[REDACTED]\" [REDACTED]"
     );
+    expect(redactSensitive('{"api_key":"FAKE","password":"FAKE"}')).toBe(
+      '{"api_key":"[REDACTED]","password":"[REDACTED]"}'
+    );
     expect(
       WorkerRunResultSchema.parse({
         schemaVersion: "1.0",
@@ -33,5 +36,26 @@ describe("worker result contract", () => {
         finishedAt: "now"
       }).status
     ).toBe("completed");
+
+    expect(
+      WorkerRunResultSchema.parse({
+        schemaVersion: "1.0",
+        runId: "failed-run",
+        status: "routing_failed",
+        taskId: "task",
+        team: "default",
+        worker: "unknown",
+        routing: { profile: null, modelRef: null, provider: null, model: null, modelSource: "none" },
+        runtime: { kind: "direct", distro: null, exitCode: null, timedOut: false, sessionId: null },
+        usage: null,
+        workspace: { mode: "shared", cwd: "C:/repo", gitRoot: null, headBefore: null, headAfter: null },
+        evidence: { changedFiles: [], diffStat: "", statusBefore: [], statusAfter: [], outOfScopeChanges: [] },
+        workerReport: { text: "" },
+        warnings: [],
+        errors: ["route unavailable"],
+        startedAt: "now",
+        finishedAt: "now"
+      }).routing.profile
+    ).toBeNull();
   });
 });

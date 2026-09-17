@@ -11,7 +11,8 @@ export const RunStatusSchema = z.enum([
   "routing_failed",
   "policy_violation",
   "invalid_result",
-  "blocked"
+  "blocked",
+  "cancelled"
 ]);
 export type RunStatus = z.infer<typeof RunStatusSchema>;
 
@@ -23,7 +24,7 @@ export const WorkerRunResultSchema = z.object({
   team: z.string().min(1),
   worker: z.string().min(1),
   routing: z.object({
-    profile: z.string().min(1),
+    profile: z.string().min(1).nullable(),
     modelRef: z.string().nullable(),
     provider: z.string().nullable(),
     model: z.string().nullable(),
@@ -82,7 +83,7 @@ export function redactSensitive(text: string): string {
   return text
     .replace(/\bsk-[A-Za-z0-9._~-]{16,}\b/giu, "[REDACTED]")
     .replace(/(authorization\s*:\s*bearer\s+)[A-Za-z0-9._~+\/-]+/giu, "$1[REDACTED]")
-    .replace(/((?:api[_-]?key|access[_-]?token|client[_-]?secret|password)\s*[:=]\s*")([^"]*)"/giu, '$1[REDACTED]"')
-    .replace(/((?:api[_-]?key|access[_-]?token|client[_-]?secret|password)\s*[:=]\s*')([^']*)'/giu, "$1[REDACTED]'")
-    .replace(/((?:api[_-]?key|access[_-]?token|client[_-]?secret|password)\s*[:=]\s*)[^\s"']+/giu, "$1[REDACTED]");
+    .replace(/((?:"(?:api[_-]?key|access[_-]?token|client[_-]?secret|password)"|(?:api[_-]?key|access[_-]?token|client[_-]?secret|password))\s*[:=]\s*")([^"]*)"/giu, '$1[REDACTED]"')
+    .replace(/((?:"(?:api[_-]?key|access[_-]?token|client[_-]?secret|password)"|(?:api[_-]?key|access[_-]?token|client[_-]?secret|password))\s*[:=]\s*')([^']*)'/giu, "$1[REDACTED]'")
+    .replace(/((?:"(?:api[_-]?key|access[_-]?token|client[_-]?secret|password)"|(?:api[_-]?key|access[_-]?token|client[_-]?secret|password))\s*[:=]\s*)[^\s"']+/giu, "$1[REDACTED]");
 }

@@ -3,9 +3,8 @@ import { getTeam, getWorker } from "../registry.js";
 import { HermesCliProvider } from "../providers/hermes-cli.js";
 import { resolveRoute } from "../resolver.js";
 import type { BridgeConfig, WorkspaceMode } from "../types.js";
-import { runWorker, type WorkerRunRequest } from "./worker-runner.js";
-import { captureGitEvidence } from "./evidence.js";
-import { createWorktree, isWritePolicy, type WorktreeInfo } from "./worktree.js";
+import { blockedWorkerResult, runWorker, type WorkerProgress, type WorkerRunRequest } from "./worker-runner.js";
+import { isWritePolicy } from "./worktree.js";
 import { redactSensitive, type WorkerRunResult } from "./result.js";
 
 export type TeamTaskRequest = Omit<WorkerRunRequest, "task" | "cwd" | "workspaceMode"> & {
@@ -20,6 +19,11 @@ export type TeamRunRequest = {
   mode: "parallel";
   tasks: TeamTaskRequest[];
   maxParallel?: number | undefined;
+};
+
+export type TeamRunOptions = {
+  onProgress?: ((taskId: string, progress: WorkerProgress) => void) | undefined;
+  signal?: AbortSignal | undefined;
 };
 
 export type TeamRunResult = {
@@ -51,7 +55,8 @@ export type TeamUsage = {
 export async function runTeam(
   config: BridgeConfig,
   request: TeamRunRequest,
-  provider?: HermesCliProvider
+  provider?: HermesCliProvider,
+  options: TeamRunOptions = {}
 ): Promise<TeamRunResult> {
   const runId = randomUUID();
   const warnings: string[] = [];
@@ -87,12 +92,27 @@ export async function runTeam(
       errors: [`Duplicate task IDs: ${[...new Set(duplicateIds)].join(", ")}`]
     };
   }
+  if (request.tasks.some((task) => (task.task.dependsOn?.length ?? 0) > 0)) {
+    return {
+      schemaVersion: "1.0",
+      runId,
+      status: "failed",
+      team: request.team,
+      mode: request.mode,
+      maxParallel: 0,
+      results: [],
+      usage: summarizeUsage([]),
+      warnings: [],
+      errors: ["Parallel team tasks with dependsOn are unsupported; submit independent tasks or run them sequentially."]
+    };
+  }
 
   const configuredTeam = getTeam(config, request.team);
   const teamLimit = configuredTeam?.maxParallel ?? config.execution.maxParallel;
   const maxParallel = Math.max(1, Math.min(config.execution.maxParallel, teamLimit, request.maxParallel ?? Number.MAX_SAFE_INTEGER));
   const results = new Array<WorkerRunResult>(request.tasks.length);
   let nextIndex = 0;
+  let failureSeen = false;
   const workerCount = Math.min(maxParallel, Math.max(1, request.tasks.length));
 
   await Promise.all(
@@ -101,10 +121,20 @@ export async function runTeam(
         const index = nextIndex++;
         const task = request.tasks[index];
         if (!task) return;
+        if (options.signal?.aborted) {
+          results[index] = blockedWorkerResult(config, task, "Task was not started because execution was cancelled.", "cancelled");
+          continue;
+        }
+        if (failureSeen) {
+          results[index] = blockedWorkerResult(config, task, "Task was not started because failFast stopped queued work after another task failed.");
+          continue;
+        }
         try {
-          results[index] = await runTeamTask(config, request.team, runId, task, warnings, provider);
+          results[index] = await runTeamTask(config, request.team, runId, task, warnings, provider, options);
+          if (config.execution.failFast && results[index].status !== "completed") failureSeen = true;
         } catch (error) {
           results[index] = failedWorkerResult(config, request.team, task, error);
+          if (config.execution.failFast) failureSeen = true;
         }
       }
     })
@@ -160,7 +190,8 @@ async function runTeamTask(
   runId: string,
   task: TeamTaskRequest,
   warnings: string[],
-  provider?: HermesCliProvider
+  provider?: HermesCliProvider,
+  options: TeamRunOptions = {}
 ): Promise<WorkerRunResult> {
   const route = resolveRoute(config, {
     team: teamName,
@@ -174,14 +205,7 @@ async function runTeamTask(
   const wantsWrite = isWritePolicy(policy);
   const requestedMode = task.workspaceMode;
   const mode = requestedMode ?? (wantsWrite ? config.execution.parallelWriteWorkspaceMode : "shared");
-  let worktree: WorktreeInfo | undefined;
-  let cwd = task.cwd;
-  if (mode === "worktree") {
-    const rootResult = await captureGitEvidence(task.cwd);
-    if (!rootResult.gitRoot) throw new Error(rootResult.error ?? "Cannot create a worktree outside a Git repository.");
-    worktree = await createWorktree(rootResult.gitRoot, runId, task.id);
-    cwd = worktree.path;
-  } else if (wantsWrite && config.execution.parallelWriteWorkspaceMode === "worktree") {
+  if (mode === "shared" && wantsWrite && config.execution.parallelWriteWorkspaceMode === "worktree") {
     warnings.push(`Task '${task.id}' explicitly uses shared workspace for a write-capable worker.`);
   }
 
@@ -189,12 +213,11 @@ async function runTeamTask(
     ...task,
     team: teamName,
     worker: route.selected.worker,
-    cwd,
-    workspaceMode: "shared"
-  }, provider);
-  result.workspace.mode = mode;
-  result.workspace.worktreePath = worktree?.path ?? null;
-  result.workspace.branch = worktree?.branch ?? null;
+    workspaceMode: mode
+  }, provider, {
+    signal: options.signal,
+    onProgress: (progress) => options.onProgress?.(task.id, progress)
+  });
   return result;
 }
 
@@ -211,7 +234,7 @@ function failedWorkerResult(
     taskId: task.id,
     team,
     worker: task.worker ?? "unknown",
-    routing: { profile: "", modelRef: null, provider: null, model: null, modelSource: "none" },
+    routing: { profile: null, modelRef: null, provider: null, model: null, modelSource: "none" },
     runtime: { kind: config.hermes.runtime, distro: config.hermes.distro ?? null, exitCode: null, timedOut: false, sessionId: null },
     usage: null,
     workspace: { mode: task.workspaceMode ?? "shared", cwd: task.cwd, gitRoot: null, headBefore: null, headAfter: null },

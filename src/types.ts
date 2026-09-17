@@ -141,6 +141,42 @@ export const BridgeConfigSchema = z.object({
       enabled: z.boolean().default(false)
     })
     .default({ enabled: false })
+}).superRefine((config, context) => {
+  if (!config.execution.collectGitEvidence) {
+    context.addIssue({
+      code: "custom",
+      path: ["execution", "collectGitEvidence"],
+      message: "execution.collectGitEvidence=false is unsupported; Git evidence is mandatory."
+    });
+  }
+  if (config.safety.acceptHooks) {
+    context.addIssue({
+      code: "custom",
+      path: ["safety", "acceptHooks"],
+      message: "safety.acceptHooks=true is unsupported; hooks are never accepted automatically."
+    });
+  }
+  if (config.execution.keepArtifacts) {
+    context.addIssue({
+      code: "custom",
+      path: ["execution", "keepArtifacts"],
+      message: "execution.keepArtifacts=true is unsupported."
+    });
+  }
+  if (config.routing.allowPaidFallback) {
+    context.addIssue({
+      code: "custom",
+      path: ["routing", "allowPaidFallback"],
+      message: "routing.allowPaidFallback=true is unsupported; routing never falls back silently."
+    });
+  }
+  if (config.kanban.enabled) {
+    context.addIssue({
+      code: "custom",
+      path: ["kanban", "enabled"],
+      message: "kanban.enabled=true is unsupported."
+    });
+  }
 });
 export type BridgeConfig = z.infer<typeof BridgeConfigSchema>;
 

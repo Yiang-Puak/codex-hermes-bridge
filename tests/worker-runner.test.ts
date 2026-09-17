@@ -1,4 +1,4 @@
-import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
@@ -71,7 +71,7 @@ class FakeRuntime implements HermesRuntime {
         args: command.args
       };
     }
-    if (command.args[0] === "sessions") {
+    if (command.args.includes("sessions") && command.args.includes("export")) {
       if (this.failUsageExport) throw new Error("usage export unavailable");
       return {
         stdout: JSON.stringify({ input_tokens: 10, output_tokens: 5, api_call_count: 2, tool_call_count: 1 }),
@@ -91,6 +91,8 @@ class FakeRuntime implements HermesRuntime {
     const query = command.args[command.args.indexOf("--query") + 1] ?? "";
     expect(query).toContain("FINAL RESPONSE CONTRACT");
     expect(query).toContain("Return at most 1200 characters");
+    expect(query).toContain("Side-effect policy: local_files_allowed");
+    expect(query).toContain("Worker commits allowed: no");
     expect(command.args).toContain("--max-turns");
     return {
       stdout: "files changed: changed.txt",
@@ -190,5 +192,72 @@ describe("runWorker", () => {
 
   it("keeps only the tail of oversized worker reports", () => {
     expect(truncateWorkerReport("0123456789", 4)).toBe("[... 6 earlier characters omitted ...]\n6789");
+  });
+
+  it("rejects a junction that escapes the configured workspace root", async () => {
+    if (process.platform !== "win32") return;
+    const root = await mkdtemp(join(tmpdir(), "chb-junction-"));
+    const allowed = join(root, "allowed");
+    const outside = join(root, "outside");
+    const linked = join(allowed, "linked");
+    await mkdir(allowed);
+    await mkdir(outside);
+    await symlink(outside, linked, "junction");
+    try {
+      const config = parseConfigText(`${configText()}\nsafety:\n  allowedWorkspaceRoots:\n    - '${allowed}'\n`);
+      const result = await runWorker(config, { worker: "coder", cwd: linked, task }, new HermesCliProvider(config, new FakeRuntime(false)));
+      expect(result.status).toBe("invalid_result");
+      expect(result.errors[0]).toContain("outside configured allowedWorkspaceRoots");
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("creates a single-worker worktree and preserves a subdirectory cwd", async () => {
+    const root = await createGitFixture();
+    const subdirectory = join(root, "subdir");
+    await mkdir(subdirectory);
+    await writeFile(join(subdirectory, "seed.txt"), "seed\n", "utf8");
+    const added = await runCommand("git", ["-C", root, "add", "."], { timeoutMs: 10_000 });
+    expect(added.exitCode).toBe(0);
+    const committed = await runCommand("git", ["-C", root, "commit", "-qm", "subdir"], { timeoutMs: 10_000 });
+    expect(committed.exitCode).toBe(0);
+    let worktree: string | null = null;
+    try {
+      const config = parseConfigText(configText());
+      const result = await runWorker(config, {
+        worker: "coder",
+        cwd: subdirectory,
+        workspaceMode: "worktree",
+        task
+      }, new HermesCliProvider(config, new FakeRuntime(false)));
+      worktree = result.workspace.worktreePath ?? null;
+      expect(result.status, JSON.stringify({ warnings: result.warnings, errors: result.errors, evidence: result.evidence })).toBe("completed");
+      expect(result.workspace.mode).toBe("worktree");
+      expect(result.workspace.cwd).toBe(join(worktree ?? "", "subdir"));
+      expect(result.evidence.changedFiles).toEqual(["subdir/changed.txt"]);
+    } finally {
+      if (worktree) await runCommand("git", ["-C", root, "worktree", "remove", "--force", worktree], { timeoutMs: 10_000 });
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("blocks worktree preparation when the source workspace is dirty", async () => {
+    const root = await createGitFixture();
+    try {
+      await writeFile(join(root, "dirty.txt"), "user change\n", "utf8");
+      const config = parseConfigText(configText());
+      const result = await runWorker(config, {
+        worker: "coder",
+        cwd: root,
+        workspaceMode: "worktree",
+        task
+      }, new HermesCliProvider(config, new FakeRuntime(false)));
+      expect(result.status).toBe("blocked");
+      expect(result.errors[0]).toContain("dirty source workspace");
+      expect(result.workspace.worktreePath).toBeUndefined();
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
   });
 });

@@ -4,7 +4,6 @@ import type { BridgeConfig } from "../types.js";
 import { runWorker, type WorkerRunRequest } from "../execution/worker-runner.js";
 import type { TaskContract } from "../execution/task-contract.js";
 import type { WorkerRunResult } from "../execution/result.js";
-import { HermesCliProvider } from "../providers/hermes-cli.js";
 
 export type PanelRequest = {
   cwd: string;
@@ -25,7 +24,12 @@ export type PanelResult = {
   errors: string[];
 };
 
-export async function runPanel(config: BridgeConfig, request: PanelRequest): Promise<PanelResult> {
+export type PanelRunOptions = {
+  signal?: AbortSignal | undefined;
+  onProgress?: ((worker: string, progress: WorkerRunResult["progress"][number]) => void) | undefined;
+};
+
+export async function runPanel(config: BridgeConfig, request: PanelRequest, options: PanelRunOptions = {}): Promise<PanelResult> {
   if (!config.panel.enabled) {
     return {
       schemaVersion: "1.0",
@@ -50,7 +54,6 @@ export async function runPanel(config: BridgeConfig, request: PanelRequest): Pro
   }
 
   const responses = new Array<PanelResult["responses"][number]>(runnable.length);
-  const provider = new HermesCliProvider(config);
   let nextIndex = 0;
   await Promise.all(
     Array.from({ length: Math.min(workerLimit, Math.max(1, runnable.length)) }, async () => {
@@ -63,7 +66,10 @@ export async function runPanel(config: BridgeConfig, request: PanelRequest): Pro
           cwd: request.cwd,
           workspaceMode: "shared",
           task: request.task
-        } satisfies WorkerRunRequest, provider);
+        } satisfies WorkerRunRequest, undefined, {
+          signal: options.signal,
+          onProgress: (progress) => options.onProgress?.(worker, progress)
+        });
         responses[index] = { worker, result };
       }
     })

@@ -141,7 +141,7 @@ server.tool(
     const notify = progressNotifier(extra);
     return jsonContent(await withHeartbeat(
       notify,
-      () => runWorker(loadConfig(), input, undefined, { onProgress: notify })
+      () => runWorker(loadConfig(), input, undefined, { onProgress: notify, signal: extra.signal })
     ));
   }
 );
@@ -167,10 +167,19 @@ server.tool(
       })
     ).min(1)
   },
-  async (input, extra) => jsonContent(await withHeartbeat(
-    progressNotifier(extra),
-    () => runTeam(loadConfig(), input)
-  ))
+  async (input, extra) => {
+    const notify = progressNotifier(extra);
+    return jsonContent(await withHeartbeat(
+      notify,
+      () => runTeam(loadConfig(), input, undefined, {
+        signal: extra.signal,
+        onProgress: (taskId, progress) => notify({
+          ...progress,
+          detail: [taskId, progress.detail].filter(Boolean).join(": ")
+        })
+      })
+    ));
+  }
 );
 
 if (loadConfig().panel.enabled) {
@@ -182,7 +191,16 @@ if (loadConfig().panel.enabled) {
       maxWorkers: z.number().int().positive().optional(),
       task: TaskContractSchema
     },
-    async (input) => jsonContent(await runPanel(loadConfig(), input))
+    async (input, extra) => {
+      const notify = progressNotifier(extra);
+      return jsonContent(await runPanel(loadConfig(), input, {
+        signal: extra.signal,
+        onProgress: (worker, progress) => notify({
+          ...progress,
+          detail: [worker, progress.detail].filter(Boolean).join(": ")
+        })
+      }));
+    }
   );
 }
 

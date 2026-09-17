@@ -29,6 +29,8 @@ export function buildWorkerPrompt(
     worker: string;
     profile: string;
     currentState: string;
+    sideEffectPolicy: string;
+    allowWorkerCommits: boolean;
   }
 ): string {
   return [
@@ -47,6 +49,12 @@ export function buildWorkerPrompt(
     "",
     "CURRENT STATE",
     details.currentState,
+    "",
+    "EXECUTION POLICY",
+    `Side-effect policy: ${details.sideEffectPolicy}`,
+    `Worker commits allowed: ${details.allowWorkerCommits ? "yes" : "no"}`,
+    "The policy is enforced by the bridge's evidence checks; it is not a sandbox.",
+    "Do not perform external side effects automatically.",
     "",
     "SCOPE / OWNERSHIP",
     "Allowed paths:",
