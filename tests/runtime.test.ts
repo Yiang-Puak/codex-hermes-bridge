@@ -2,8 +2,15 @@ import { execPath } from "node:process";
 import { describe, expect, it } from "vitest";
 import { runCommand } from "../src/command.js";
 import { parseConfigText } from "../src/config.js";
-import { buildHermesArgs, buildHermesInvocation, parseSessionId, parseSessionUsage } from "../src/providers/hermes-cli.js";
+import {
+  buildHermesArgs,
+  buildHermesInvocation,
+  HermesCliProvider,
+  parseSessionId,
+  parseSessionUsage
+} from "../src/providers/hermes-cli.js";
 import { resolveWindowsPathToWsl } from "../src/runtime/paths.js";
+import type { HermesRuntime, RuntimeCommand, RuntimeResult } from "../src/runtime/runtime.js";
 import { buildWslArgs } from "../src/runtime/wsl.js";
 
 describe("runtime adapters", () => {
@@ -63,7 +70,8 @@ hermes:
       "/mnt/c/repo with spaces",
       "--",
       "/usr/bin/env",
-      "PATH=/root/.local/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",
+      "-S",
+      'PATH="${HOME}/.local/bin:${PATH}"',
       "hermes",
       "--version"
     ]);
@@ -127,5 +135,113 @@ hermes:
     const result = await runCommand(execPath, ["-e", "setTimeout(() => {}, 1000)"], { timeoutMs: 20 });
 
     expect(result.timedOut).toBe(true);
+  });
+
+  it("rejects when a child closes stdin before a large prompt is delivered", async () => {
+    await expect(runCommand(
+      execPath,
+      ["-e", "process.stdin.destroy(); setTimeout(() => process.exit(0), 25)"],
+      { input: "x".repeat(1024 * 1024), timeoutMs: 5000 }
+    )).rejects.toBeInstanceOf(Error);
+  });
+
+  it.each([
+    ["stdout", "process.stdout.write('x'.repeat(128))"],
+    ["stderr", "process.stderr.write('x'.repeat(128))"]
+  ] as const)("rejects when %s exceeds the output limit", async (stream, script) => {
+    await expect(runCommand(execPath, ["-e", script], {
+      maxOutputBytes: 32,
+      timeoutMs: 5000
+    })).rejects.toMatchObject({ name: "CommandOutputLimitError", stream, limitBytes: 32 });
+  });
+
+  it("rejects with AbortError when cancelled", async () => {
+    const controller = new AbortController();
+    const result = runCommand(execPath, ["-e", "setTimeout(() => {}, 10000)"], {
+      signal: controller.signal,
+      timeoutMs: 5000
+    });
+    setTimeout(() => controller.abort(), 20);
+
+    await expect(result).rejects.toMatchObject({ name: "AbortError" });
+  });
+});
+
+function runtimeResult(command: RuntimeCommand, overrides: Partial<RuntimeResult> = {}): RuntimeResult {
+  return {
+    stdout: "",
+    stderr: "",
+    exitCode: 0,
+    timedOut: false,
+    runtime: "direct",
+    command: "fake-hermes",
+    args: command.args,
+    ...overrides
+  };
+}
+
+class SessionExportRuntime implements HermesRuntime {
+  readonly kind = "direct" as const;
+  readonly calls: RuntimeCommand[] = [];
+
+  async run(command: RuntimeCommand): Promise<RuntimeResult> {
+    this.calls.push(command);
+    const profile = command.args[command.args.indexOf("-p") + 1] ?? "unknown";
+    if (command.args.includes("sessions")) {
+      return runtimeResult(command, {
+        stdout: JSON.stringify({ input_tokens: 2, output_tokens: 3, api_call_count: 1, tool_call_count: 1 })
+      });
+    }
+    return runtimeResult(command, {
+      stdout: `completed ${profile}`,
+      stderr: `session_id: ${profile}-session`
+    });
+  }
+}
+
+class HelpFailureRuntime implements HermesRuntime {
+  readonly kind = "direct" as const;
+  readonly calls: RuntimeCommand[] = [];
+
+  async run(command: RuntimeCommand): Promise<RuntimeResult> {
+    this.calls.push(command);
+    return runtimeResult(command, { stderr: "probe failed", exitCode: 2 });
+  }
+}
+
+describe("Hermes CLI provider runtime boundaries", () => {
+  it("exports each session with the invocation profile", async () => {
+    const config = parseConfigText("hermes:\n  runtime: direct\n  command: fake-hermes\n  queryMode: query\n");
+    const runtime = new SessionExportRuntime();
+    const provider = new HermesCliProvider(config, runtime);
+
+    for (const profile of ["alpha", "beta"]) {
+      const result = await provider.run({
+        profile,
+        toolsets: [],
+        prompt: `prompt for ${profile}`,
+        timeoutMs: 5000
+      });
+      expect(result.usage?.totalTokens).toBe(5);
+    }
+
+    expect(runtime.calls.filter((call) => call.args.includes("sessions")).map((call) => call.args.slice(0, 2))).toEqual([
+      ["-p", "alpha"],
+      ["-p", "beta"]
+    ]);
+  });
+
+  it("fails explicitly when the help probe exits nonzero", async () => {
+    const config = parseConfigText("hermes:\n  runtime: direct\n  command: fake-hermes\n");
+    const runtime = new HelpFailureRuntime();
+    const provider = new HermesCliProvider(config, runtime);
+
+    await expect(provider.run({
+      profile: "executor",
+      toolsets: [],
+      prompt: "secret prompt should not appear in this error",
+      timeoutMs: 5000
+    })).rejects.toThrow("Hermes chat --help probe failed (exit code 2).");
+    expect(runtime.calls).toHaveLength(1);
   });
 });

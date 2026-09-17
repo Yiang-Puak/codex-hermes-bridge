@@ -7,6 +7,7 @@ export type RuntimeCommand = {
   cwd?: string | undefined;
   input?: string | undefined;
   timeoutMs: number;
+  signal?: AbortSignal | undefined;
 };
 
 export type RuntimeResult = CommandResult & {

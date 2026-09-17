@@ -12,7 +12,8 @@ export class WslRuntime implements HermesRuntime {
     const args = buildWslArgs(this.settings, command);
     const result = await runCommand("wsl.exe", args, {
       timeoutMs: command.timeoutMs,
-      input: command.input
+      input: command.input,
+      signal: command.signal
     });
     return {
       ...result,
@@ -36,14 +37,13 @@ export function buildWslArgs(
   if (command.cwd) {
     args.push("--cd", resolveWindowsPathToWsl(command.cwd));
   }
-  // `wsl.exe` does not start a login shell, so user-local Hermes installs are
-  // commonly absent from PATH. `env` preserves argv safety while adding the
-  // conventional user-local bin directory; command/profile/model values stay
-  // configuration-driven.
+  // Preserve the distro's PATH and prepend its user-local bin without using a
+  // shell. The configured command and task arguments remain separate argv items.
   args.push(
     "--",
     "/usr/bin/env",
-    "PATH=/root/.local/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",
+    "-S",
+    'PATH="${HOME}/.local/bin:${PATH}"',
     settings.command,
     ...command.args
   );

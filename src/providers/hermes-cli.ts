@@ -10,6 +10,7 @@ export type HermesInvocation = {
   prompt?: string | undefined;
   timeoutMs: number;
   maxTurns?: number | undefined;
+  signal?: AbortSignal | undefined;
 };
 
 export type HermesSessionUsage = {
@@ -78,21 +79,24 @@ export class HermesCliProvider {
   }
 
   async run(invocation: HermesInvocation): Promise<HermesRunResult> {
-    const queryMode = await this.resolveQueryMode();
+    const queryMode = await this.resolveQueryMode(invocation.signal);
     const built = buildHermesInvocation(invocation, this.config.hermes.source, queryMode);
     const result = await this.runtime.run({
       args: built.args,
       ...(built.input !== undefined ? { input: built.input } : {}),
       cwd: invocation.cwd,
-      timeoutMs: invocation.timeoutMs
+      timeoutMs: invocation.timeoutMs,
+      signal: invocation.signal
     });
     const sessionId = parseSessionId(result.stderr);
     if (!sessionId) return { ...result, sessionId: null, usage: null };
 
     try {
       const exported = await this.runtime.run({
-        args: ["sessions", "export", "--session-id", sessionId, "-"],
-        timeoutMs: 30_000
+        args: ["-p", invocation.profile, "sessions", "export", "--session-id", sessionId, "-"],
+        cwd: invocation.cwd,
+        timeoutMs: 30_000,
+        signal: invocation.signal
       });
       const usage = exported.exitCode === 0 ? parseSessionUsage(exported.stdout) : null;
       return {
@@ -101,7 +105,8 @@ export class HermesCliProvider {
         usage,
         ...(usage ? {} : { usageWarning: `Hermes usage is unavailable for session '${sessionId}'.` })
       };
-    } catch {
+    } catch (error) {
+      if (error instanceof Error && error.name === "AbortError") throw error;
       return {
         ...result,
         sessionId,
@@ -117,14 +122,26 @@ export class HermesCliProvider {
 
   private queryMode: QueryMode | null = null;
 
-  private async resolveQueryMode(): Promise<QueryMode> {
+  private async resolveQueryMode(signal?: AbortSignal): Promise<QueryMode> {
     if (this.queryMode) return this.queryMode;
     if (this.config.hermes.queryMode !== "auto") {
       this.queryMode = this.config.hermes.queryMode;
       return this.queryMode;
     }
-    const help = await this.runtime.run({ args: ["chat", "--help"], timeoutMs: 10_000 });
-    this.queryMode = `${help.stdout}\n${help.stderr}`.includes("--query-file") ? "query-file" : "query";
+    const help = await this.runtime.run({ args: ["chat", "--help"], timeoutMs: 10_000, signal });
+    if (help.timedOut || help.exitCode !== 0) {
+      throw new Error(
+        `Hermes chat --help probe failed (${help.timedOut ? "timed out" : `exit code ${help.exitCode ?? "unknown"}`}).`
+      );
+    }
+    const output = `${help.stdout}\n${help.stderr}`;
+    if (output.includes("--query-file")) {
+      this.queryMode = "query-file";
+    } else if (output.includes("--query")) {
+      this.queryMode = "query";
+    } else {
+      throw new Error("Hermes chat --help did not advertise --query or --query-file.");
+    }
     return this.queryMode;
   }
 }

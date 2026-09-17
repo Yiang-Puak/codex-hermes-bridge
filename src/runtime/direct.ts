@@ -11,7 +11,8 @@ export class DirectRuntime implements HermesRuntime {
     const result = await runCommand(this.settings.command, command.args, {
       cwd: command.cwd,
       timeoutMs: command.timeoutMs,
-      input: command.input
+      input: command.input,
+      signal: command.signal
     });
     return {
       ...result,
