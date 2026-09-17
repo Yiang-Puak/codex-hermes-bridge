@@ -61,6 +61,11 @@ export async function runWorker(
       });
     }
 
+    const sourceRoot = await realpath(before.gitRoot);
+    const sourceSubdirectory = relative(sourceRoot, sourceCwd).replaceAll("\\", "/");
+    if (sourceSubdirectory.startsWith("..") || isAbsolute(sourceSubdirectory)) {
+      throw new Error("Workspace cwd is not contained by its Git root.");
+    }
     let executionCwd = sourceCwd;
     let worktree: WorktreeInfo | undefined;
     if (workspaceMode === "worktree") {
@@ -74,13 +79,8 @@ export async function runWorker(
         });
       }
       throwIfAborted(options.signal);
-      const sourceRoot = await realpath(before.gitRoot);
-      const subdirectory = relative(sourceRoot, sourceCwd);
-      if (subdirectory.startsWith("..") || isAbsolute(subdirectory)) {
-        throw new Error("Workspace cwd is not contained by its Git root.");
-      }
       worktree = await createWorktree(before.gitRoot, runId, task.id);
-      executionCwd = resolve(worktree.path, subdirectory);
+      executionCwd = resolve(worktree.path, sourceSubdirectory);
       mark("worktree_created", `Isolated worktree prepared at ${executionCwd}.`);
     }
     const executionRequest = { ...request, cwd: executionCwd };
@@ -120,7 +120,8 @@ export async function runWorker(
         progress,
         warnings: [],
         errors: [cancelled ? "Hermes execution was cancelled." : redactSensitive(error instanceof Error ? error.message : String(error))],
-        worktree
+        worktree,
+        scopeBase: sourceSubdirectory
       });
     }
 
@@ -129,8 +130,8 @@ export async function runWorker(
     const check = compareEvidence(
       before,
       after,
-      scopePatterns(after.gitRoot ?? before.gitRoot, executionCwd, task.scope.allowedPaths),
-      scopePatterns(after.gitRoot ?? before.gitRoot, executionCwd, task.scope.forbiddenPaths),
+      scopePatternsFromBase(sourceSubdirectory, task.scope.allowedPaths),
+      scopePatternsFromBase(sourceSubdirectory, task.scope.forbiddenPaths),
       config.execution.allowWorkerCommits,
       config.workers[route.worker]?.sideEffectPolicy ?? config.safety.defaultSideEffectPolicy
     );
@@ -167,7 +168,8 @@ export async function runWorker(
             ? ["Hermes exhausted its turn budget. Inspect the partial report and changed files before resuming."]
             : [],
       runtime: runtimeResult,
-      worktree
+      worktree,
+      scopeBase: sourceSubdirectory
     });
   } catch (error) {
     const message = redactSensitive(error instanceof ResolverError ? `${error.code}: ${error.message}` : error instanceof Error ? error.message : String(error));
@@ -236,13 +238,18 @@ function baseResult(
     progress: WorkerProgress[];
     runtime?: HermesRunResult;
     worktree?: WorktreeInfo | undefined;
+    scopeBase?: string | undefined;
   }
 ): WorkerRunResult {
   const check = compareEvidence(
     before,
     after,
-    scopePatterns(after.gitRoot ?? before.gitRoot, request.cwd, request.task.scope.allowedPaths),
-    scopePatterns(after.gitRoot ?? before.gitRoot, request.cwd, request.task.scope.forbiddenPaths),
+    details.scopeBase === undefined
+      ? scopePatterns(after.gitRoot ?? before.gitRoot, request.cwd, request.task.scope.allowedPaths)
+      : scopePatternsFromBase(details.scopeBase, request.task.scope.allowedPaths),
+    details.scopeBase === undefined
+      ? scopePatterns(after.gitRoot ?? before.gitRoot, request.cwd, request.task.scope.forbiddenPaths)
+      : scopePatternsFromBase(details.scopeBase, request.task.scope.forbiddenPaths),
     config.execution.allowWorkerCommits,
     config.workers[route.worker]?.sideEffectPolicy ?? config.safety.defaultSideEffectPolicy
   );
@@ -296,7 +303,10 @@ function baseResult(
 
 function scopePatterns(gitRoot: string | null, cwd: string, patterns: string[]): string[] {
   if (!gitRoot) return patterns;
-  const base = relative(gitRoot, cwd).replaceAll("\\", "/");
+  return scopePatternsFromBase(relative(resolve(gitRoot), resolve(cwd)).replaceAll("\\", "/"), patterns);
+}
+
+function scopePatternsFromBase(base: string, patterns: string[]): string[] {
   if (!base || base === ".") return patterns;
   return patterns.map((pattern) => {
     if (isAbsolute(pattern) || pattern.startsWith("../") || pattern.startsWith("..\\")) return pattern;
